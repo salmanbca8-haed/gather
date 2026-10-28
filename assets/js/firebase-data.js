@@ -35,9 +35,14 @@
         const snapshot = await db.collection('users').doc(uid).get();
         if (!snapshot.exists) return null;
         const data = snapshot.data();
-        const presence = data.show_last_seen || uid === currentUid()
-            ? await db.collection('presence').doc(uid).get()
-            : null;
+        let presence = null;
+        if (data.show_last_seen || uid === currentUid()) {
+            try {
+                presence = await db.collection('presence').doc(uid).get();
+            } catch (error) {
+                console.warn('Could not read presence for', uid, error);
+            }
+        }
         return userSummary(uid, {
             ...data,
             last_seen_at: presence?.exists ? presence.data().last_seen_at : null
@@ -111,9 +116,9 @@
         return { conversations: items };
     }
 
-    async function messageRecord(doc, conversationId) {
+    async function messageRecord(doc, conversationId, fetchProfile = profile) {
         const data = doc.data();
-        const sender = await profile(data.sender_id);
+        const sender = await fetchProfile(data.sender_id);
         return {
             id: doc.id,
             conversation_id: conversationId,
@@ -134,16 +139,23 @@
         let request;
         if (query.before_id) {
             const cursor = await collection.doc(String(query.before_id)).get();
+            if (!cursor.exists) return { messages: [], oldest_id: null, has_more: false };
             request = collection.orderBy('created_at', 'desc').endBefore(cursor).limit(31);
         } else if (query.after_id) {
             const cursor = await collection.doc(String(query.after_id)).get();
+            if (!cursor.exists) return { messages: [], oldest_id: null, has_more: false };
             request = collection.orderBy('created_at', 'asc').startAfter(cursor).limit(30);
         } else {
             request = collection.orderBy('created_at', 'desc').limit(31);
         }
         const snapshot = await request.get();
         const docs = query.after_id ? snapshot.docs : snapshot.docs.slice(0, 30).reverse();
-        const result = await Promise.all(docs.map(doc => messageRecord(doc, conversationId)));
+        const profileCache = new Map();
+        const getCachedProfile = async (uid) => {
+            if (!profileCache.has(uid)) profileCache.set(uid, profile(uid));
+            return profileCache.get(uid);
+        };
+        const result = await Promise.all(docs.map(doc => messageRecord(doc, conversationId, getCachedProfile)));
         return {
             messages: result,
             oldest_id: result[0]?.id || null,
@@ -359,7 +371,8 @@
                     throw new Error('You are not a member of this conversation.');
                 }
                 const rateData = rate.exists ? rate.data() : null;
-                const sameWindow = rateData && Date.now() - rateData.window_start.toMillis() < 60000;
+                const windowStartMillis = rateData?.window_start?.toMillis ? rateData.window_start.toMillis() : null;
+                const sameWindow = Boolean(windowStartMillis && Date.now() - windowStartMillis < 60000);
                 if (sameWindow && rateData.count >= 30) {
                     throw new Error('You are sending messages too quickly. Please wait a moment.');
                 }
@@ -442,12 +455,16 @@
             return { message_id: String(body.message_id), deleted_for_everyone: true };
         }
         if (action === 'messages.read') {
-            const ref = db.collection('conversations').doc(String(body.conversation_id))
-                .collection('members').doc(uid);
-            await ref.set({
-                last_read_message_id: String(body.through_id),
-                last_read_at: timestamp()
-            }, { merge: true });
+            try {
+                const ref = db.collection('conversations').doc(String(body.conversation_id))
+                    .collection('members').doc(uid);
+                await ref.set({
+                    last_read_message_id: String(body.through_id),
+                    last_read_at: timestamp()
+                }, { merge: true });
+            } catch (error) {
+                console.warn('messages.read error:', error);
+            }
             return {};
         }
         if (action === 'profile.avatar-upload') {
@@ -481,7 +498,11 @@
             return { user: await profile(uid) };
         }
         if (action === 'presence.update') {
-            await db.collection('presence').doc(uid).set({ last_seen_at: timestamp() });
+            try {
+                await db.collection('presence').doc(uid).set({ last_seen_at: timestamp() });
+            } catch (error) {
+                console.warn('presence.update error:', error);
+            }
             return {};
         }
         if (action === 'blocks.add') {

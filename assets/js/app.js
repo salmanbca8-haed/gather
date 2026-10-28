@@ -127,7 +127,7 @@
         ui.messageInput.disabled = false;
         updateMessageNotice();
         document.body.classList.add('in-chat');
-        api('presence.update').catch(showError);
+        api('presence.update').catch(err => console.warn('Presence update error:', err));
         refreshConversations().catch(showError);
         startPolling();
     }
@@ -382,7 +382,7 @@
                 body: { conversation_id: state.activeId, through_id: throughId }
             });
         } catch (error) {
-            showError(error);
+            console.warn('markRead failed:', error);
         }
     }
 
@@ -410,7 +410,7 @@
                 refreshConversations().catch(() => {});
             }
         } catch (error) {
-            toast(error.message, 'error');
+            console.warn('pollMessages failed:', error);
         } finally {
             state.loadingMessages = false;
         }
@@ -528,7 +528,7 @@
             if (!document.hidden && state.user) refreshConversations().catch(() => {});
         }, 15000));
         state.pollers.push(window.setInterval(() => {
-            if (!document.hidden && state.user) api('presence.update').catch(showError);
+            if (!document.hidden && state.user) api('presence.update').catch(err => console.warn('Presence update error:', err));
         }, 60000));
     }
 
@@ -984,7 +984,7 @@
         });
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden && state.user) {
-                api('presence.update').catch(showError);
+                api('presence.update').catch(err => console.warn('Presence update error:', err));
                 refreshConversations().catch(() => {});
                 if (isConversationVisible() && state.messages.length) {
                     markRead(state.messages[state.messages.length - 1].id);

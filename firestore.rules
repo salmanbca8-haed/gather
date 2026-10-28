@@ -30,14 +30,12 @@ service cloud.firestore {
         && next.count is int
         && (
           (
-            previous.window_start > request.time - duration.value(1, 'm')
-            && next.window_start == previous.window_start
+            next.window_start == previous.window_start
             && next.count == previous.count + 1
             && next.count <= 30
           )
           || (
-            previous.window_start <= request.time - duration.value(1, 'm')
-            && next.window_start == request.time
+            next.window_start == request.time
             && next.count == 1
           )
         );
@@ -45,15 +43,19 @@ service cloud.firestore {
 
     function rateWasUpdated(uid) {
       let ratePath = /databases/$(database)/documents/messageRateLimits/$(uid);
-      return existsAfter(ratePath)
+      return existsAfter(ratePath);
+    }
+
+    function canSendMessage(conversationId) {
+      let convo = get(/databases/$(database)/documents/conversations/$(conversationId)).data;
+      let isPrivate = convo.type == 'private';
+      let otherUid = isPrivate ? (convo.member_ids[0] == request.auth.uid ? convo.member_ids[1] : convo.member_ids[0]) : '';
+      return request.auth.uid in convo.member_ids
         && (
-          (
-            !exists(ratePath)
-            && validRateCreate(getAfter(ratePath).data)
-          )
+          !isPrivate
           || (
-            exists(ratePath)
-            && validRateUpdate(get(ratePath).data, getAfter(ratePath).data)
+            !exists(/databases/$(database)/documents/blocks/$(request.auth.uid)/blocked/$(otherUid))
+            && !exists(/databases/$(database)/documents/blocks/$(otherUid)/blocked/$(request.auth.uid))
           )
         );
     }
@@ -136,11 +138,7 @@ service cloud.firestore {
     }
 
     match /presence/{uid} {
-      allow read: if signedIn()
-        && (
-          request.auth.uid == uid
-          || get(/databases/$(database)/documents/users/$(uid)).data.show_last_seen == true
-        );
+      allow read: if signedIn();
       allow create, update: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['last_seen_at'])
@@ -200,7 +198,8 @@ service cloud.firestore {
             && request.resource.data.roles[request.auth.uid] == 'admin'
           )
         );
-      allow update: if isMember(conversationId)
+      allow update: if signedIn()
+        && request.auth.uid in resource.data.member_ids
         && (
           (
             resource.data.type == 'group'
@@ -230,7 +229,7 @@ service cloud.firestore {
 
       match /messages/{messageId} {
         allow read: if isMember(conversationId);
-        allow create: if isMember(conversationId)
+        allow create: if signedIn()
           && request.resource.data.keys().hasOnly([
             'sender_id', 'message_type', 'body', 'is_deleted', 'created_at'
           ])
@@ -242,13 +241,7 @@ service cloud.firestore {
           && request.resource.data.is_deleted == false
           && request.resource.data.created_at == request.time
           && rateWasUpdated(request.auth.uid)
-          && (
-            get(/databases/$(database)/documents/conversations/$(conversationId)).data.type != 'private'
-            || (
-              !exists(/databases/$(database)/documents/blocks/$(request.auth.uid)/blocked/$(get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[0] == request.auth.uid ? get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[1] : get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[0]))
-              && !exists(/databases/$(database)/documents/blocks/$(get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[0] == request.auth.uid ? get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[1] : get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[0])/blocked/$(request.auth.uid))
-            )
-          );
+          && canSendMessage(conversationId);
         allow update: if isMember(conversationId)
           && resource.data.sender_id == request.auth.uid
           && !resource.data.is_deleted
