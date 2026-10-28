@@ -1,0 +1,8 @@
+.env
+**/node_modules/
+/storage/
+functions/.env.*
+functions/.runtimeconfig.json
+functions/service-account*.json
+.DS_Store
+Thumbs.db

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f5f4f0">
+    <title>Gather — thoughtful conversations</title>
+    <link rel="stylesheet" href="assets/css/app.css?v=20261028-firebase-hosted-v1">
+    <script>
+        try {
+            if (localStorage.getItem('gather-theme') === 'dark') document.documentElement.dataset.theme = 'dark';
+        } catch (error) {}
+    </script>
+    <script src="assets/js/crypto.js?v=20261028-e2ee-input" defer></script>
+    <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-app-compat.js" defer></script>
+    <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-auth-compat.js" defer></script>
+    <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-functions-compat.js" defer></script>
+    <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore-compat.js" defer></script>
+    <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-storage-compat.js" defer></script>
+    <script src="assets/js/firebase-config.js?v=20261028-firebase-hosted-v1" defer></script>
+    <script src="assets/js/firebase-auth.js?v=20261028-firebase-hosted-v1" defer></script>
+    <script src="assets/js/firebase-data.js?v=20261028-firebase-data-v1" defer></script>
+    <script src="assets/js/app.js?v=20261028-firebase-hosted-v1" defer></script>
+</head>
+<body>
+<div class="page-noise" aria-hidden="true"></div>
+<header class="site-header">
+    <a class="brand" href="#" aria-label="Gather home"><span class="brand-mark">g.</span><span>gather</span></a>
+    <nav class="site-nav" aria-label="Main navigation">
+        <a href="#about">Why Gather</a>
+        <button class="icon-button theme-toggle" type="button" aria-label="Switch color theme" title="Switch color theme">
+            <span class="theme-glyph" aria-hidden="true">◐</span>
+        </button>
+        <button class="button button-quiet nav-signin" type="button" data-open-auth="login">Sign in</button>
+        <button class="button button-primary nav-register" type="button" data-open-auth="register">Create account <span aria-hidden="true">↗</span></button>
+    </nav>
+</header>
+
+<main>
+    <section class="landing" id="landing">
+        <div class="hero-copy">
+            <div class="eyebrow"><span class="eyebrow-dot"></span> A calmer place to connect</div>
+            <h1>Good conversations<br>make <em>everything</em> closer.</h1>
+            <p class="hero-description">A private, thoughtful space for the people you want to hear from. No phone number required. Just you, your people, and the conversation.</p>
+            <div class="hero-actions">
+                <button class="button button-primary button-large" type="button" data-open-auth="register">Create your account <span aria-hidden="true">↗</span></button>
+                <button class="button button-outline button-large" type="button" data-open-auth="login">I already have an account</button>
+            </div>
+            <div class="hero-note"><span class="lock-icon" aria-hidden="true">⌑</span> Private by design <span class="note-divider"></span> No email or phone needed</div>
+        </div>
+        <div class="hero-art" aria-label="Illustration of a friendly conversation">
+            <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+            <div class="float-card float-card-top"><span class="tiny-avatar avatar-peach">M</span><span><b>Mae</b><small>That made my day ✨</small></span><i>now</i></div>
+            <div class="art-center"><div class="art-sun"></div><div class="art-figure figure-one"></div><div class="art-figure figure-two"></div><div class="art-table"></div><span class="art-spark spark-one">✳</span><span class="art-spark spark-two">✦</span></div>
+            <div class="float-card float-card-bottom"><span class="tiny-avatar avatar-sage">J</span><span><b>Jules</b><small>Here whenever you need.</small></span><span class="online-pip"></span></div>
+            <div class="art-caption">A little more present.<br><b>A lot more connected.</b></div>
+        </div>
+        <div class="hero-scroll" aria-hidden="true"><span></span> SCROLL TO EXPLORE</div>
+    </section>
+
+    <section class="features-section" id="about">
+        <div class="section-heading"><span class="eyebrow">MADE FOR THE MOMENTS IN BETWEEN</span><h2>Less noise.<br><em>More meaning.</em></h2></div>
+        <div class="feature-grid">
+            <article class="feature-card"><span class="feature-icon icon-convo">↗</span><h3>Conversations that stay</h3><p>Your messages are saved, so your favorite little moments are there when you come back.</p></article>
+            <article class="feature-card"><span class="feature-icon icon-private">⌑</span><h3>Your space, your choice</h3><p>Create an account with just a username. Choose what profile details are visible and when.</p></article>
+            <article class="feature-card"><span class="feature-icon icon-groups">◌</span><h3>Close-knit, not complicated</h3><p>Talk one-to-one or bring your people together in a group conversation.</p></article>
+        </div>
+        <div class="privacy-note" id="privacy"><span class="privacy-icon">✳</span><p><b>Private conversations, protected by encryption</b><br>New messages are encrypted in your browser before they reach Firebase. Your recovery passphrase protects your private keys and is never sent to Gather. Verify a contact’s fingerprint through a separate trusted channel before sending. HTTPS is required in production. As with any hosted web app, users must trust the site to deliver the encryption code.</p></div>
+    </section>
+
+    <section class="auth-section is-hidden" id="auth-section">
+        <div class="auth-card">
+            <button type="button" class="auth-back" id="auth-back">← Back to Gather</button>
+            <span class="eyebrow" id="auth-kicker">WELCOME BACK</span>
+            <h2 id="auth-title">Sign in to your space.</h2>
+            <p id="auth-subtitle">Pick up right where the conversation left off.</p>
+            <form id="login-form" class="auth-form">
+                <label>Username<input name="username" autocomplete="username" maxlength="24" required></label>
+                <label>Password<input name="password" type="password" autocomplete="current-password" maxlength="72" required></label>
+                <button class="button button-primary button-full" type="submit">Sign in <span aria-hidden="true">↗</span></button>
+            </form>
+            <form id="register-form" class="auth-form is-hidden">
+                <label>Username<input name="username" autocomplete="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9][A-Za-z0-9._]{1,22}[A-Za-z0-9]" required><small>3–24 letters, numbers, periods or underscores.</small></label>
+                <label>Display name<input name="display_name" autocomplete="name" minlength="2" maxlength="60" required></label>
+                <label>Password<input name="password" type="password" autocomplete="new-password" minlength="10" maxlength="72" required><small>At least 10 characters, up to 72 bytes.</small></label>
+                <label>Confirm password<input name="confirm_password" type="password" autocomplete="new-password" minlength="10" maxlength="72" required></label>
+                <button class="button button-primary button-full" type="submit">Create account <span aria-hidden="true">↗</span></button>
+            </form>
+            <p class="auth-switch" id="auth-switch">New to Gather? <button type="button" data-open-auth="register">Create an account</button></p>
+        </div>
+    </section>
+
+    <section class="chat-app is-hidden" id="chat-app" aria-label="Gather messaging">
+        <aside class="sidebar">
+            <div class="sidebar-top"><a class="brand" href="#"><span class="brand-mark">g.</span><span>gather</span></a><button type="button" class="icon-button theme-toggle" aria-label="Switch color theme">◐</button></div>
+            <button class="profile-chip" id="profile-open" type="button"><span class="avatar avatar-me" id="my-avatar">?</span><span class="profile-chip-copy"><b id="my-display-name">Your profile</b><small id="my-username">@username</small></span><span class="chevron">⌄</span></button>
+            <div class="sidebar-label-row"><span>YOUR INBOX</span><button class="text-button" type="button" id="new-group-open">+ New group</button></div>
+            <label class="search-wrap"><span aria-hidden="true">⌕</span><input id="user-search" type="search" placeholder="Find someone…" autocomplete="off" aria-label="Search users"><kbd>/</kbd></label>
+            <div class="search-results is-hidden" id="search-results"></div>
+            <div class="conversation-list" id="conversation-list"><div class="list-loading"><span class="spinner"></span> Loading conversations…</div></div>
+            <div class="sidebar-bottom"><button class="sidebar-action" type="button" id="settings-open"><span>⚙</span> Profile & privacy</button><button class="sidebar-action logout-action" type="button" id="logout-button"><span>↪</span> Sign out</button><div class="sidebar-footnote">A quieter corner of the internet <span>✳</span></div></div>
+        </aside>
+        <section class="chat-panel" id="chat-panel">
+            <div class="chat-empty" id="chat-empty"><div class="empty-illustration"><span class="empty-orbit"></span><span class="empty-speech">…</span><span class="empty-spark">✳</span></div><span class="eyebrow">YOUR PEOPLE ARE HERE</span><h2>Make room for a<br><em>good conversation.</em></h2><p>Start a new chat or choose someone from your inbox.</p><button class="button button-primary" type="button" id="empty-search-focus">Find someone <span>↗</span></button></div>
+            <div class="conversation-view is-hidden" id="conversation-view">
+                <header class="conversation-header"><button class="icon-button mobile-back" type="button" id="mobile-back" aria-label="Back to conversations">←</button><span class="avatar conversation-avatar" id="peer-avatar">?</span><div class="conversation-heading"><h2 id="conversation-title"></h2><p id="conversation-subtitle"></p></div><button class="icon-button conversation-info-button" id="conversation-info" type="button" aria-label="Conversation details" title="Conversation details">ⓘ</button></header>
+                <div class="message-area" id="message-area"><button class="older-button is-hidden" type="button" id="load-older">Load earlier messages</button><div class="message-list" id="message-list"></div></div>
+                <div class="encryption-notice" id="encryption-notice" role="status">Set up encryption to start chatting.</div>
+                <form class="composer" id="message-form"><div class="composer-wrap"><textarea id="message-input" rows="1" maxlength="5000" placeholder="Write something kind…" aria-label="Write a message" required></textarea><div class="composer-footer"><span>Enter to send <span class="composer-dot">·</span> Shift + Enter for a new line</span><span class="char-count" id="char-count"></span><button class="send-button" type="submit" aria-label="Send message" title="Send message">↑</button></div></div></form>
+            </div>
+        </section>
+    </section>
+</main>
+
+<footer class="site-footer"><a class="brand" href="#"><span class="brand-mark">g.</span><span>gather</span></a><span>Made for people, not the noise.</span><a href="#privacy">Privacy, plainly <span>↗</span></a></footer>
+
+<dialog class="modal" id="profile-modal">
+    <form method="dialog" class="modal-top"><span class="eyebrow">YOUR PROFILE</span><button class="icon-button modal-close" aria-label="Close">×</button></form>
+    <h2>A little about you.</h2><p class="modal-intro">Your username can’t be changed. Your display name and bio are shown to people you chat with.</p>
+    <div class="profile-avatar-setting">
+        <span class="avatar profile-avatar-preview" id="profile-avatar-preview">?</span>
+        <div class="profile-avatar-actions">
+            <b>Profile photo</b>
+            <small>JPG, PNG, or WebP up to 2 MB</small>
+            <label class="button button-outline profile-avatar-pick">Choose photo
+                <input id="avatar-file" type="file" accept="image/jpeg,image/png,image/webp">
+            </label>
+            <div class="profile-avatar-buttons">
+                <button class="button button-primary" type="button" id="avatar-upload">Upload</button>
+                <button class="text-button" type="button" id="avatar-remove">Remove photo</button>
+            </div>
+        </div>
+    </div>
+    <form id="profile-form" class="modal-form">
+        <label>Username<input id="profile-username" disabled></label>
+        <label>Display name<input name="display_name" id="profile-display-name" maxlength="60" required></label>
+        <label>Bio<textarea name="bio" id="profile-bio" maxlength="280" rows="3" placeholder="A line or two about you"></textarea></label>
+        <label class="check-row"><input type="checkbox" name="show_last_seen" id="profile-last-seen"> Show my last seen status to chat participants</label>
+        <button class="button button-primary button-full" type="submit">Save profile</button>
+    </form>
+    <div class="encryption-profile">
+        <b>End-to-end encryption</b>
+        <p id="encryption-profile-status">Your encryption keys are locked.</p>
+        <code id="encryption-fingerprint" class="is-hidden"></code>
+        <button class="text-button is-hidden" type="button" id="copy-encryption-fingerprint">Copy my fingerprint</button>
+        <button class="button button-outline button-full" type="button" id="encryption-manage">Set up or unlock encryption</button>
+    </div>
+    <div class="modal-divider"></div>
+    <form id="password-form" class="modal-form">
+        <h3>Change password</h3>
+        <label>Current password<input type="password" name="current_password" autocomplete="current-password" required></label>
+        <label>New password<input type="password" name="new_password" minlength="10" maxlength="72" autocomplete="new-password" required></label>
+        <button class="button button-outline button-full" type="submit">Update password</button>
+    </form>
+    <p class="privacy-copy">Your profile and encrypted message envelopes are stored in Firebase. New messages are encrypted in your browser before upload; your recovery passphrase never leaves this device. Deleting a message replaces its encrypted content with a deletion notice. The Firebase-hosted app must be trusted to deliver the encryption code, so keep the site and Firebase project secure.</p>
+</dialog>
+
+<dialog class="modal" id="crypto-modal">
+    <form method="dialog" class="modal-top"><span class="eyebrow">MESSAGE ENCRYPTION</span><button class="icon-button modal-close" type="submit" aria-label="Close encryption setup">×</button></form>
+    <h2 id="crypto-title">Protect your message keys.</h2>
+    <p class="modal-intro" id="crypto-intro"></p>
+    <form id="crypto-form" class="modal-form">
+        <label>Recovery passphrase<input id="crypto-passphrase" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></label>
+        <label id="crypto-confirm-row">Confirm recovery passphrase<input id="crypto-confirm" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></label>
+        <label class="check-row" id="crypto-saved-row"><input id="crypto-saved" type="checkbox" required> I have saved this passphrase somewhere safe. Gather cannot recover it.</label>
+        <button class="button button-primary button-full" id="crypto-submit" type="submit">Create encrypted key backup</button>
+    </form>
+    <p class="encryption-error" id="crypto-error" role="status"></p>
+</dialog>
+
+<dialog class="modal modal-group" id="group-modal">
+    <form method="dialog" class="modal-top"><span class="eyebrow">A PLACE FOR YOUR PEOPLE</span><button class="icon-button modal-close" aria-label="Close">×</button></form>
+    <h2 id="group-modal-title">Start a group.</h2><p class="modal-intro">Choose a name and at least one person to invite.</p>
+    <form id="group-form" class="modal-form">
+        <label>Group name<input id="group-title" maxlength="80" required placeholder="Sunday people"></label>
+        <label>Find people<input id="group-search" type="search" autocomplete="off" placeholder="Search by name or username"></label>
+        <div id="group-search-results" class="modal-search-results"></div>
+        <div id="group-selected" class="selected-members"></div>
+        <button class="button button-primary button-full" type="submit">Create group</button>
+    </form>
+</dialog>
+
+<dialog class="modal modal-group" id="details-modal">
+    <form method="dialog" class="modal-top"><span class="eyebrow">CONVERSATION DETAILS</span><button class="icon-button modal-close" aria-label="Close">×</button></form>
+    <h2 id="details-title">People here.</h2><p class="modal-intro">Compare each fingerprint with that person through a separate trusted channel before sending encrypted messages. A server-provided fingerprint alone is not verification.</p><div id="details-members" class="details-members"></div>
+    <div id="group-add-area" class="is-hidden"><label class="modal-search-label">Add someone<input id="member-search" type="search" placeholder="Search people"></label><div id="member-search-results" class="modal-search-results"></div></div>
+    <button class="button button-outline button-full danger-button is-hidden" type="button" id="block-user">Block this person</button>
+</dialog>
+
+<div class="toast-region" id="toast-region" role="status" aria-live="polite"></div>
+</body>
+</html>
