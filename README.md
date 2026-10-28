@@ -1,53 +1,43 @@
 # Gather
 
-Gather is a static HTML/CSS/JavaScript chat app backed entirely by Firebase. It uses Firebase Hosting, Authentication, Cloud Firestore, Cloud Storage, and callable Cloud Functions. It does not use PHP, MySQL, Apache, or XAMPP.
+Gather is a browser-based messaging app built with Firebase Authentication, Cloud Firestore, and Firebase Hosting. It does not use PHP, MySQL, Cloud Functions, Firebase Storage, or require a paid billing plan.
 
-The app supports username/password accounts without asking for an email address, profiles and photos, private and group conversations, and browser-side end-to-end encryption for new messages. The client stores only encrypted message envelopes in Firestore. The recovery passphrase encrypts the private E2EE keys before their backup is stored in Firebase. Existing MySQL accounts and chat history are not imported; this project is configured for a fresh start.
+## Firebase setup (Spark/no-cost plan)
 
-## Firebase setup
-
-The repository is configured for the Firebase project `gather-b3c61`. Confirm the values in `assets/js/firebase-config.js` belong to the intended project before deployment.
-
-1. In Firebase Console, enable **Authentication → Sign-in method → Email/Password**.
-2. Create a Cloud Firestore database and a Cloud Storage bucket. Do not loosen the rules in `firestore.rules` or `storage.rules`.
-3. Add the Hosting domains (`gather-b3c61.web.app`, `gather-b3c61.firebaseapp.com`, and any custom domain) to Authentication's authorized domains.
-4. Cloud Functions deployment requires the project to use the Blaze billing plan. Review Firebase pricing and set budget alerts before deploying.
-5. Install Node.js 22 or newer and authenticate the Firebase CLI:
+1. In the [Firebase Console](https://console.firebase.google.com/), open project `gather-b3c61`.
+2. Under **Authentication → Sign-in method**, enable **Email/Password**.
+3. Under **Firestore Database**, create a database. Choose a location and **Start in production mode**. Creating Firestore is a required one-time setup; it does not require upgrading to Blaze. Firestore is subject to Spark plan quotas and limits.
+4. In **Project settings → General**, register a Web app if one is not already registered. Copy its Firebase web configuration into `assets/js/firebase-config.js`.
+5. Add the Hosting domain (for example `gather-b3c61.web.app`) to **Authentication → Settings → Authorized domains** if it is not already listed.
+6. Install the Firebase CLI if needed, sign in, and select the project:
 
    ```powershell
-   npm install --prefix functions
-   npx firebase-tools login
-   npx firebase-tools use gather-b3c61
+   npm install -g firebase-tools
+   firebase login
+   firebase use gather-b3c61
    ```
 
-6. Deploy the application and its access-control rules:
+7. From the project folder, deploy Firestore rules/indexes and the static site:
 
    ```powershell
-   npx firebase-tools deploy --only hosting,functions,firestore:rules,firestore:indexes,storage
+   firebase deploy --only firestore,hosting
    ```
 
-7. Open the Hosting URL shown by the Firebase CLI and create a **new** Gather account. Create or use a second account to test direct chats, groups, profile settings, and encryption-fingerprint verification.
+   Do not deploy Functions or Storage; Gather does not use them.
 
-## Data and account behavior
+## Running locally
 
-- Usernames are normalized to lowercase and reserved by a trusted Cloud Function. Firebase Authentication uses an internal `@gather.invalid` alias; it is not a real email address.
-- Password recovery by email is unavailable because users do not provide a real email address. A signed-in user can change their password by confirming the current password.
-- Firestore and Storage rules deny direct conversation/message writes and restrict profile edits, private key-backup reads, member reads, and profile-photo uploads. Callable Functions validate message envelopes and membership, and rate-limit sends.
-- Profile photos use Firebase download URLs so browsers can display them. Those URLs are bearer links: anyone who obtains a photo URL can view that photo, even though Storage's direct read rule requires sign-in.
-- The app does not import the previous MySQL accounts, profiles, photos, conversations, or messages. Treat deployment as a new installation.
-- Firebase configuration values in the browser are public client configuration, not service-account credentials. Do not add a service-account key to this repository. Restrict the API key to the Firebase APIs and domains this app needs.
-- Firebase Hosting serves the JavaScript that performs encryption. End-to-end encryption protects message contents stored in Firestore, but users must trust the deployed website and project owners not to serve modified client code.
+Serve this folder with any static web server, or deploy it to Firebase Hosting. Opening `index.html` directly as a `file://` URL may prevent Firebase authentication from working. No XAMPP, Apache, PHP, or MySQL setup is needed.
+
+## Accounts and privacy
+
+- Accounts use Firebase Email/Password behind the scenes. The app turns each username into an internal `@gather.invalid` email alias, so users do not enter a real email address.
+- New accounts and conversations are stored in Firestore. Existing MySQL data is not migrated.
+- Profile photos are resized and stored in the user's Firestore profile document rather than Firebase Storage. The app caps the resulting image data at 700,000 characters; this uses Firestore document storage and read/write quota.
+- New message content is encrypted in the browser before it is sent to Firestore. Private key backups are encrypted using the user's recovery passphrase. Losing that passphrase can make the backup unrecoverable.
+- Encryption does not protect against a compromised device or malicious site code. Verify contact fingerprints through a separate trusted channel.
+- Firebase Spark is no-cost within its quotas, not unlimited. Review Firebase's current [pricing and quotas](https://firebase.google.com/pricing) before public use. No billing upgrade is required for this setup.
 
 ## Validation
 
-Run the focused checks from the project directory:
-
-```powershell
-npm run lint --prefix functions
-node --check assets/js/firebase-auth.js
-node --check assets/js/firebase-data.js
-node --check assets/js/app.js
-node --check assets/js/crypto.js
-```
-
-Firebase Auth, Firestore, Storage, and callable Functions require a configured Firebase project; static syntax checks do not replace testing against the deployed services.
+Use [tests/manual-checklist.md](tests/manual-checklist.md) to verify setup and app behavior with two browser profiles. Firestore must be created and the rules deployed before account creation, conversations, or messages can work.

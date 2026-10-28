@@ -8,9 +8,6 @@
 
     const app = firebase.initializeApp(config);
     const auth = app.auth();
-    const functions = app.functions('us-central1');
-    const claimUsername = functions.httpsCallable('claimUsername');
-    const revokeOtherSessions = functions.httpsCallable('revokeOtherSessions');
     let resolveReady;
     const ready = new Promise(resolve => {
         resolveReady = resolve;
@@ -34,18 +31,22 @@
     }
 
     function authError(error) {
+        if (error.code === 'auth/configuration-not-found'
+            || error.code === 'auth/operation-not-allowed') {
+            return new Error('Firebase Authentication is not ready for this project. In Firebase Console, open Authentication → Sign-in method, enable Email/Password, and save. Also confirm the app is using project gather-b3c61.');
+        }
+        if (error.code === 'auth/invalid-api-key') {
+            return new Error('Firebase rejected this project’s API key. Check that assets/js/firebase-config.js uses the Web app config from project gather-b3c61.');
+        }
         if (error.code === 'auth/user-not-found'
             || error.code === 'auth/wrong-password'
             || error.code === 'auth/invalid-credential') {
             return new Error('The username or password is incorrect.');
         }
-        if (error.code === 'auth/email-already-in-use' || error.code === 'functions/already-exists') {
+        if (error.code === 'auth/email-already-in-use') {
             return new Error('That username is already taken.');
         }
-        if (error.code === 'functions/unauthenticated') {
-            return new Error('Your sign-in expired. Please sign in again.');
-        }
-        if (error.code === 'auth/network-request-failed' || error.code === 'functions/unavailable') {
+        if (error.code === 'auth/network-request-failed') {
             return new Error('Could not reach Firebase. Check your connection and try again.');
         }
         if (error.code === 'auth/too-many-requests') {
@@ -74,13 +75,7 @@
                 throw authError(error);
             }
         }
-        try {
-            await claimUsername({ username: normalizeUsername(username) });
-            await user.getIdToken(true);
-            return user;
-        } catch (error) {
-            throw authError(error);
-        }
+        return user;
     }
 
     async function signIn(username, password) {
@@ -105,13 +100,9 @@
             );
             await user.reauthenticateWithCredential(credential);
             await user.updatePassword(newPassword);
-            await revokeOtherSessions();
         } catch (error) {
             if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
                 throw new Error('Your current password is incorrect.');
-            }
-            if (error.code && error.code.startsWith('functions/')) {
-                throw new Error('Your password changed, but Firebase could not revoke other sessions. Sign out of all devices and try again.');
             }
             throw authError(error);
         }

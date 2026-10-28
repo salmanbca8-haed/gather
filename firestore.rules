@@ -5,32 +5,138 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function validUsername(username) {
+      return username is string
+        && username.matches('^[a-z0-9][a-z0-9._]{1,22}[a-z0-9]$')
+        && !username.matches('.*\\.\\..*');
+    }
+
     function isMember(conversationId) {
       return signedIn()
         && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids;
     }
 
+    function validEnvelope(conversationId) {
+      let envelope = request.resource.data.body;
+      let members = get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids;
+      return envelope is map
+        && envelope.keys().hasAll(['v', 'c', 's', 'fp', 'epk', 'iv', 'data', 'keys', 'sig'])
+        && envelope.v == 1
+        && envelope.c == conversationId
+        && envelope.s == request.auth.uid
+        && envelope.fp is string
+        && envelope.fp.matches('^[a-f0-9]{64}$')
+        && envelope.epk is string
+        && envelope.epk.size() <= 100
+        && envelope.iv is string
+        && envelope.data is string
+        && envelope.data.size() <= 60000
+        && envelope.sig is string
+        && envelope.sig.size() <= 200
+        && envelope.keys is map
+        && envelope.keys.keys().hasAll(members)
+        && envelope.keys.keys().hasOnly(members);
+    }
+
+    function validRateCreate(next) {
+      return next.keys().hasOnly(['window_start', 'count'])
+        && next.window_start is timestamp
+        && next.count is int
+        && next.window_start == request.time
+        && next.count == 1;
+    }
+
+    function validRateUpdate(previous, next) {
+      return next.keys().hasOnly(['window_start', 'count'])
+        && next.window_start is timestamp
+        && next.count is int
+        && (
+          (
+            previous.window_start > request.time - duration.value(1, 'm')
+            && next.window_start == previous.window_start
+            && next.count == previous.count + 1
+            && next.count <= 30
+          )
+          || (
+            previous.window_start <= request.time - duration.value(1, 'm')
+            && next.window_start == request.time
+            && next.count == 1
+          )
+        );
+    }
+
+    function rateWasUpdated(uid) {
+      let ratePath = /databases/$(database)/documents/messageRateLimits/$(uid);
+      return existsAfter(ratePath)
+        && (
+          (
+            !exists(ratePath)
+            && validRateCreate(getAfter(ratePath).data)
+          )
+          || (
+            exists(ratePath)
+            && validRateUpdate(get(ratePath).data, getAfter(ratePath).data)
+          )
+        );
+    }
+
+    function latestMessageMatches(conversationId) {
+      let latest = request.resource.data;
+      let messagePath = /databases/$(database)/documents/conversations/$(conversationId)/messages/$(latest.latest_message_id);
+      let message = getAfter(messagePath).data;
+      return latest.latest_sender_id == request.auth.uid
+        && (
+          (!message.is_deleted && latest.latest_message == 'Encrypted message')
+          || (message.is_deleted && latest.latest_message == 'Message deleted')
+        )
+        && message.sender_id == request.auth.uid;
+    }
+
+    function directConversationIdMatches(conversationId, members) {
+      return members.size() == 2
+        && members[0] < members[1]
+        && conversationId == 'direct_' + members[0] + '_' + members[1];
+    }
+
     match /usernameClaims/{username} {
-      allow read, write: if false;
+      allow get: if signedIn()
+        && request.auth.token.email == username + '@gather.invalid';
+      allow list: if false;
+      allow create: if signedIn()
+        && validUsername(username)
+        && request.resource.data.keys().hasOnly(['uid', 'username', 'created_at'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.username == username
+        && request.auth.token.email == username + '@gather.invalid'
+        && request.resource.data.created_at == request.time
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.username == username;
+      allow update, delete: if false;
     }
 
     match /users/{uid} {
       allow read: if signedIn();
       allow create: if signedIn()
         && request.auth.uid == uid
-        && request.auth.token.gatherUsername == request.resource.data.username
+        && validUsername(request.resource.data.username)
+        && request.auth.token.email == request.resource.data.username + '@gather.invalid'
+        && getAfter(/databases/$(database)/documents/usernameClaims/$(request.resource.data.username)).data.uid == uid
         && request.resource.data.keys().hasOnly([
-          'username', 'display_name', 'bio', 'avatar_path', 'show_last_seen', 'created_at', 'updated_at'
+          'username', 'display_name', 'bio', 'avatar_data', 'show_last_seen',
+          'created_at', 'updated_at'
         ])
-        && request.resource.data.username is string
         && request.resource.data.display_name is string
         && request.resource.data.display_name.size() >= 2
-        && request.resource.data.display_name.size() <= 60;
+        && request.resource.data.display_name.size() <= 60
+        && request.resource.data.bio == ''
+        && request.resource.data.avatar_data == null
+        && request.resource.data.show_last_seen == true
+        && request.resource.data.created_at == request.time
+        && request.resource.data.updated_at == request.time;
       allow update: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.username == resource.data.username
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'display_name', 'bio', 'avatar_path', 'show_last_seen', 'last_seen_at', 'updated_at'
+          'display_name', 'bio', 'avatar_data', 'show_last_seen', 'updated_at'
         ])
         && request.resource.data.display_name is string
         && request.resource.data.display_name.size() >= 2
@@ -38,15 +144,27 @@ service cloud.firestore {
         && request.resource.data.bio is string
         && request.resource.data.bio.size() <= 280
         && (
-          request.resource.data.avatar_path == null
-          || request.resource.data.avatar_path == 'avatars/' + uid + '/profile'
-        )
-        && (
-          !('last_seen_at' in request.resource.data)
-          || request.resource.data.last_seen_at == null
-          || request.resource.data.last_seen_at is timestamp
+          request.resource.data.avatar_data == null
+          || (
+            request.resource.data.avatar_data is string
+            && request.resource.data.avatar_data.size() <= 700000
+            && request.resource.data.avatar_data.matches('^data:image/jpeg;base64,[A-Za-z0-9+/=]+$')
+          )
         )
         && request.resource.data.show_last_seen is bool;
+      allow delete: if false;
+    }
+
+    match /presence/{uid} {
+      allow read: if signedIn()
+        && (
+          request.auth.uid == uid
+          || get(/databases/$(database)/documents/users/$(uid)).data.show_last_seen == true
+        );
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['last_seen_at'])
+        && request.resource.data.last_seen_at == request.time;
       allow delete: if false;
     }
 
@@ -60,7 +178,8 @@ service cloud.firestore {
         && request.resource.data.public_encryption_key.kty == 'EC'
         && request.resource.data.public_encryption_key.crv == 'P-256'
         && request.resource.data.public_signing_key.kty == 'EC'
-        && request.resource.data.public_signing_key.crv == 'P-256';
+        && request.resource.data.public_signing_key.crv == 'P-256'
+        && request.resource.data.updated_at == request.time;
       allow delete: if false;
     }
 
@@ -73,19 +192,127 @@ service cloud.firestore {
         ])
         && request.resource.data.backup_ciphertext is string
         && request.resource.data.backup_ciphertext.size() <= 12000
-        && request.resource.data.kdf_iterations == 600000;
+        && request.resource.data.kdf_iterations == 600000
+        && request.resource.data.updated_at == request.time;
+      allow delete: if false;
+    }
+
+    match /messageRateLimits/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && validRateCreate(request.resource.data);
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && validRateUpdate(resource.data, request.resource.data);
       allow delete: if false;
     }
 
     match /conversations/{conversationId} {
-      allow read: if isMember(conversationId);
-      allow create: if false;
-      allow update: if false;
+      allow get: if signedIn()
+        && (
+          conversationId.matches('^direct_' + request.auth.uid + '_[A-Za-z0-9]+$')
+          || conversationId.matches('^direct_[A-Za-z0-9]+_' + request.auth.uid + '$')
+          || request.auth.uid in resource.data.member_ids
+        );
+      allow list: if signedIn() && request.auth.uid in resource.data.member_ids;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'type', 'title', 'member_ids', 'roles', 'created_by',
+          'created_at', 'latest_message', 'latest_sender_id'
+        ])
+        && request.resource.data.member_ids is list
+        && request.resource.data.roles.keys().size() == request.resource.data.member_ids.size()
+        && request.auth.uid in request.resource.data.member_ids
+        && request.resource.data.created_by == request.auth.uid
+        && request.resource.data.created_at == request.time
+        && request.resource.data.latest_sender_id == ''
+        && request.resource.data.latest_message == 'Start a conversation'
+        && request.resource.data.roles.keys().hasAll(request.resource.data.member_ids)
+        && request.resource.data.roles.keys().hasOnly(request.resource.data.member_ids)
+        && (
+          (
+            request.resource.data.type == 'private'
+            && directConversationIdMatches(conversationId, request.resource.data.member_ids)
+            && request.resource.data.title == ''
+            && request.resource.data.roles[request.auth.uid] == 'member'
+            && !exists(/databases/$(database)/documents/blocks/$(request.auth.uid)/blocked/$(request.resource.data.member_ids[0] == request.auth.uid ? request.resource.data.member_ids[1] : request.resource.data.member_ids[0]))
+            && !exists(/databases/$(database)/documents/blocks/$(request.resource.data.member_ids[0] == request.auth.uid ? request.resource.data.member_ids[1] : request.resource.data.member_ids[0])/blocked/$(request.auth.uid))
+          )
+          || (
+            request.resource.data.type == 'group'
+            && request.resource.data.member_ids.size() >= 2
+            && request.resource.data.member_ids.size() <= 21
+            && request.resource.data.title is string
+            && request.resource.data.title.size() >= 2
+            && request.resource.data.title.size() <= 80
+            && request.resource.data.roles[request.auth.uid] == 'admin'
+          )
+        );
+      allow update: if isMember(conversationId)
+        && (
+          (
+            resource.data.type == 'group'
+            && resource.data.roles[request.auth.uid] == 'admin'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'member_ids', 'roles', 'updated_at'
+            ])
+            && request.resource.data.member_ids is list
+            && request.resource.data.roles.keys().size() == request.resource.data.member_ids.size()
+            && request.resource.data.member_ids.size() >= 2
+            && request.resource.data.member_ids.size() <= 21
+            && request.auth.uid in request.resource.data.member_ids
+            && request.resource.data.roles[request.auth.uid] == 'admin'
+            && request.resource.data.roles.keys().hasAll(request.resource.data.member_ids)
+            && request.resource.data.roles.keys().hasOnly(request.resource.data.member_ids)
+            && request.resource.data.updated_at == request.time
+          )
+          || (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'latest_sender_id', 'latest_message', 'latest_message_id', 'latest_at'
+            ])
+            && request.resource.data.latest_at == request.time
+            && latestMessageMatches(conversationId)
+          )
+        );
       allow delete: if false;
 
       match /messages/{messageId} {
         allow read: if isMember(conversationId);
-        allow create, update: if false;
+        allow create: if isMember(conversationId)
+          && request.resource.data.keys().hasOnly([
+            'sender_id', 'message_type', 'body', 'is_deleted', 'created_at'
+          ])
+          && request.resource.data.sender_id == request.auth.uid
+          && request.resource.data.message_type == 'encrypted'
+          && request.resource.data.is_deleted == false
+          && request.resource.data.created_at == request.time
+          && validEnvelope(conversationId)
+          && rateWasUpdated(request.auth.uid)
+          && (
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.type != 'private'
+            || (
+              !exists(/databases/$(database)/documents/blocks/$(request.auth.uid)/blocked/$(get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[0] == request.auth.uid ? get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[1] : get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[0]))
+              && !exists(/databases/$(database)/documents/blocks/$(get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[0] == request.auth.uid ? get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[1] : get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids[0])/blocked/$(request.auth.uid))
+            )
+          );
+        allow update: if isMember(conversationId)
+          && resource.data.sender_id == request.auth.uid
+          && !resource.data.is_deleted
+          && (
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['body', 'edited_at'])
+              && request.time < resource.data.created_at + duration.value(15, 'm')
+              && request.resource.data.edited_at == request.time
+              && validEnvelope(conversationId)
+            )
+            || (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['body', 'deleted_at', 'is_deleted'])
+              && request.resource.data.body == {}
+              && request.resource.data.deleted_at == request.time
+              && request.resource.data.is_deleted == true
+            )
+          );
         allow delete: if false;
       }
 
@@ -94,20 +321,26 @@ service cloud.firestore {
         allow create: if signedIn()
           && request.auth.uid == uid
           && isMember(conversationId)
-          && request.resource.data.keys().hasOnly(['last_read_message_id', 'last_read_at']);
+          && request.resource.data.keys().hasOnly(['last_read_message_id', 'last_read_at'])
+          && request.resource.data.last_read_at == request.time;
         allow update: if signedIn()
           && request.auth.uid == uid
           && isMember(conversationId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'last_read_message_id', 'last_read_at'
-          ]);
+          ])
+          && request.resource.data.last_read_at == request.time;
         allow delete: if false;
       }
     }
 
     match /blocks/{uid}/blocked/{otherUid} {
       allow read: if signedIn() && request.auth.uid == uid;
-      allow create: if signedIn() && request.auth.uid == uid && uid != otherUid;
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && uid != otherUid
+        && request.resource.data.keys().hasOnly(['created_at'])
+        && request.resource.data.created_at == request.time;
       allow delete: if signedIn() && request.auth.uid == uid;
     }
   }

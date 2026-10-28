@@ -5,6 +5,7 @@
     const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
     const state = {
         user: null,
+        authBusy: false,
         conversations: [],
         activeId: null,
         activeConversation: null,
@@ -46,11 +47,18 @@
     };
 
     function toast(message, type = 'info') {
+        const existing = Array.from(ui.toastRegion.children)
+            .find(element => element.textContent === message);
+        if (existing) {
+            window.clearTimeout(existing.dismissTimer);
+            existing.dismissTimer = window.setTimeout(() => existing.remove(), 4000);
+            return;
+        }
         const element = document.createElement('div');
         element.className = `toast ${type}`;
         element.textContent = message;
         ui.toastRegion.append(element);
-        window.setTimeout(() => element.remove(), 4000);
+        element.dismissTimer = window.setTimeout(() => element.remove(), 4000);
     }
 
     async function api(action, options = {}) {
@@ -1186,7 +1194,11 @@
         $('#auth-back').addEventListener('click', showLanding);
         $('#login-form').addEventListener('submit', async event => {
             event.preventDefault();
+            if (state.authBusy) return;
+            state.authBusy = true;
             const formElement = event.currentTarget;
+            const submit = $('button[type="submit"]', formElement);
+            submit.disabled = true;
             const form = new FormData(formElement);
             try {
                 await window.GatherFirebaseAuth.signIn(form.get('username'), form.get('password'));
@@ -1198,11 +1210,18 @@
                 showChat(result.user);
             } catch (error) {
                 showError(error);
+            } finally {
+                state.authBusy = false;
+                submit.disabled = false;
             }
         });
         $('#register-form').addEventListener('submit', async event => {
             event.preventDefault();
+            if (state.authBusy) return;
+            state.authBusy = true;
             const formElement = event.currentTarget;
+            const submit = $('button[type="submit"]', formElement);
+            submit.disabled = true;
             const form = new FormData(formElement);
             try {
                 if (form.get('password') !== form.get('confirm_password')) {
@@ -1220,6 +1239,9 @@
                 showChat(result.user);
             } catch (error) {
                 showError(error);
+            } finally {
+                state.authBusy = false;
+                submit.disabled = false;
             }
         });
         $('#profile-open').addEventListener('click', showProfile);

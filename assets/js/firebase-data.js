@@ -1,20 +1,11 @@
 (() => {
     'use strict';
 
-    if (!window.firebase?.firestore || !window.firebase?.storage) {
-        throw new Error('Firebase data services could not be initialized.');
+    if (!window.firebase?.firestore) {
+        throw new Error('Firebase Firestore could not be initialized.');
     }
 
     const db = firebase.firestore();
-    const storage = firebase.storage();
-    const functions = firebase.app().functions('us-central1');
-    const avatarUrls = new Map();
-    const openDirectConversation = functions.httpsCallable('openDirectConversation');
-    const createGroup = functions.httpsCallable('createGroup');
-    const changeGroupMember = functions.httpsCallable('changeGroupMember');
-    const sendMessage = functions.httpsCallable('sendMessage');
-    const editMessage = functions.httpsCallable('editMessage');
-    const deleteMessage = functions.httpsCallable('deleteMessage');
     const timestamp = () => firebase.firestore.FieldValue.serverTimestamp();
     const currentUid = () => {
         const user = firebase.auth().currentUser;
@@ -28,13 +19,13 @@
         return Number.isNaN(date.getTime()) ? null : date.toISOString();
     }
 
-    function userSummary(uid, data, avatarUrl = null) {
+    function userSummary(uid, data) {
         return {
             id: uid,
             username: data.username,
             display_name: data.display_name || data.username,
             bio: data.bio || '',
-            avatar_url: avatarUrl,
+            avatar_url: data.avatar_data || null,
             show_last_seen: data.show_last_seen !== false,
             last_seen_at: dateValue(data.last_seen_at)
         };
@@ -62,15 +53,13 @@
         const snapshot = await db.collection('users').doc(uid).get();
         if (!snapshot.exists) return null;
         const data = snapshot.data();
-        let avatarUrl = null;
-        if (typeof data.avatar_path === 'string') {
-            avatarUrl = avatarUrls.get(data.avatar_path) || null;
-            if (!avatarUrl) {
-                avatarUrl = await storage.ref(data.avatar_path).getDownloadURL();
-                avatarUrls.set(data.avatar_path, avatarUrl);
-            }
-        }
-        return userSummary(uid, data, avatarUrl);
+        const presence = data.show_last_seen || uid === currentUid()
+            ? await db.collection('presence').doc(uid).get()
+            : null;
+        return userSummary(uid, {
+            ...data,
+            last_seen_at: presence?.exists ? presence.data().last_seen_at : null
+        });
     }
 
     async function identity(uid) {
@@ -143,15 +132,14 @@
         const items = await Promise.all(snapshot.docs.map(async doc => {
             const data = doc.data();
             const members = await Promise.all(data.member_ids.map(memberUid => profile(memberUid)));
-            const compactMembers = members.filter(Boolean);
-            const label = conversationLabel(data, compactMembers, uid);
+            const label = conversationLabel(data, members.filter(Boolean), uid);
             return {
                 id: doc.id,
                 type: data.type,
                 title: label.title,
                 username: label.username,
                 avatar_url: label.avatar_url,
-                latest_at: dateValue(data.latest_at || data.updated_at || data.created_at),
+                latest_at: dateValue(data.latest_at || data.created_at),
                 latest_sender_id: data.latest_sender_id || '',
                 latest_message: data.latest_message || 'Start a conversation',
                 unread_count: 0
@@ -177,7 +165,7 @@
             sender_encryption_public_key: senderKeys.public_encryption_key || null,
             sender_signing_public_key: senderKeys.public_signing_key || null,
             message_type: data.message_type,
-            body: data.is_deleted ? '' : data.body,
+            body: data.is_deleted ? '' : JSON.stringify(data.body),
             is_deleted: Boolean(data.is_deleted),
             created_at: dateValue(data.created_at),
             edited_at: dateValue(data.edited_at)
@@ -187,28 +175,23 @@
     async function messages(query = {}) {
         const conversationId = String(query.conversation_id || '');
         const collection = db.collection('conversations').doc(conversationId).collection('messages');
-        const base = collection
-            .orderBy('created_at', 'desc');
         let request;
         if (query.before_id) {
-            const cursor = await db.collection('conversations').doc(conversationId)
-                .collection('messages').doc(String(query.before_id)).get();
-            request = base.endBefore(cursor).limit(31);
+            const cursor = await collection.doc(String(query.before_id)).get();
+            request = collection.orderBy('created_at', 'desc').endBefore(cursor).limit(31);
         } else if (query.after_id) {
             const cursor = await collection.doc(String(query.after_id)).get();
             request = collection.orderBy('created_at', 'asc').startAfter(cursor).limit(30);
         } else {
-            request = base.limit(31);
+            request = collection.orderBy('created_at', 'desc').limit(31);
         }
         const snapshot = await request.get();
-        const docs = query.after_id
-            ? snapshot.docs.slice(0, 30)
-            : snapshot.docs.slice(0, 30).reverse();
+        const docs = query.after_id ? snapshot.docs : snapshot.docs.slice(0, 30).reverse();
         const result = await Promise.all(docs.map(doc => messageRecord(doc, conversationId)));
         return {
             messages: result,
             oldest_id: result[0]?.id || null,
-            has_more: snapshot.docs.length > 30
+            has_more: !query.after_id && snapshot.docs.length > 30
         };
     }
 
@@ -222,18 +205,48 @@
         ]);
         const unique = new Map();
         [...usernameResults.docs, ...nameResults.docs].forEach(doc => {
-            if (doc.id !== currentUid()) unique.set(doc.id, doc.id);
+            if (doc.id !== currentUid()) unique.set(doc.id, doc.data());
         });
-        const users = await Promise.all([...unique.values()].slice(0, 12).map(profile));
-        return { users: users.filter(Boolean) };
+        return {
+            users: [...unique].slice(0, 12).map(([uid, data]) => userSummary(uid, data))
+        };
     }
 
-    async function getMessage(id, conversationId) {
-        const ref = db.collection('conversations').doc(String(conversationId))
-            .collection('messages').doc(String(id));
-        const snapshot = await ref.get();
-        if (!snapshot.exists) throw new Error('Message not found.');
-        return { ref, conversationId: String(conversationId) };
+    async function resizeAvatar(file) {
+        if (!(file instanceof File) || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)
+            || file.size < 1 || file.size > 2 * 1024 * 1024) {
+            throw new Error('Choose a JPG, PNG, or WebP photo up to 2 MB.');
+        }
+        let image;
+        try {
+            image = await createImageBitmap(file);
+        } catch {
+            throw new Error('This image file could not be decoded.');
+        }
+        if (!image.width || !image.height || image.width > 4096 || image.height > 4096) {
+            image.close();
+            throw new Error('The image dimensions must be 4096 × 4096 pixels or smaller.');
+        }
+        const scale = Math.min(1, 512 / Math.max(image.width, image.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        const context = canvas.getContext('2d');
+        if (!context) {
+            image.close();
+            throw new Error('Your browser could not process this photo.');
+        }
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        image.close();
+        for (const quality of [0.82, 0.68, 0.52, 0.38]) {
+            const result = canvas.toDataURL('image/jpeg', quality);
+            if (result.length <= 700000) return result;
+        }
+        throw new Error('This photo could not be compressed enough to save. Choose a smaller image.');
+    }
+
+    function directConversationId(uid, peerId) {
+        return `direct_${[uid, peerId].sort().join('_')}`;
     }
 
     async function request(action, options = {}) {
@@ -241,58 +254,137 @@
         const query = options.query || {};
         const uid = firebase.auth().currentUser?.uid || null;
 
-        if (action === 'bootstrap') {
-            const user = uid ? await profile(uid) : null;
-            return { user };
-        }
+        if (action === 'bootstrap') return { user: uid ? await profile(uid) : null };
         if (action === 'register') {
             if (!uid) throw new Error('Sign in before creating your profile.');
             const username = String(body.username || '').trim().toLowerCase();
-            const claimed = firebase.auth().currentUser?.getIdTokenResult
-                ? (await firebase.auth().currentUser.getIdTokenResult(true)).claims.gatherUsername
-                : null;
-            if (claimed !== username) throw new Error('The Firebase username does not match this account.');
+            const email = firebase.auth().currentUser?.email?.toLowerCase();
+            if (email !== `${username}@gather.invalid`) {
+                throw new Error('The Firebase username does not match this account. Sign in with the username you registered.');
+            }
             const displayName = String(body.display_name || '').trim();
-            if (displayName.length < 2 || displayName.length > 60) throw new Error('Display name must be 2–60 characters.');
-            const user = {
-                username,
-                display_name: displayName,
-                bio: '',
-                avatar_path: null,
-                show_last_seen: true,
-                last_seen_at: null,
-                created_at: timestamp(),
-                updated_at: timestamp()
-            };
-            const ref = db.collection('users').doc(uid);
-            const existing = await ref.get();
-            if (!existing.exists) await ref.set(user);
-            return { user: userSummary(uid, existing.exists ? existing.data() : user) };
+            if (displayName.length < 2 || displayName.length > 60) {
+                throw new Error('Display name must be 2–60 characters.');
+            }
+            const claimRef = db.collection('usernameClaims').doc(username);
+            const userRef = db.collection('users').doc(uid);
+            await db.runTransaction(async transaction => {
+                const [claim, existingUser] = await Promise.all([
+                    transaction.get(claimRef),
+                    transaction.get(userRef)
+                ]);
+                if (claim.exists) {
+                    if (claim.data().uid !== uid) throw new Error('That username is already taken.');
+                    if (existingUser.exists) throw new Error('This Gather profile already exists. Sign in instead.');
+                } else {
+                    transaction.set(claimRef, {
+                        uid,
+                        username,
+                        created_at: timestamp()
+                    });
+                }
+                transaction.set(userRef, {
+                    username,
+                    display_name: displayName,
+                    bio: '',
+                    avatar_data: null,
+                    show_last_seen: true,
+                    created_at: timestamp(),
+                    updated_at: timestamp()
+                });
+            });
+            return { user: await profile(uid) };
         }
-        if (!uid && action !== 'logout') throw new Error('Please sign in to continue.');
+        if (!uid) throw new Error('Please sign in to continue.');
+        if (action === 'logout') return {};
         if (action === 'conversations') return conversations();
         if (action === 'conversations.details') return { conversation: await conversationDetails(query.id) };
         if (action === 'users.search') return searchUsers(String(query.q || ''));
         if (action === 'conversations.direct') {
             const peerId = String(body.user_id || '');
             if (!peerId || peerId === uid) throw new Error('Choose another Gather member.');
-            const response = await openDirectConversation({ userId: peerId });
-            return { conversation_id: response.data.conversationId };
+            const peer = await profile(peerId);
+            if (!peer) throw new Error('That Gather member could not be found.');
+            const id = directConversationId(uid, peerId);
+            const ref = db.collection('conversations').doc(id);
+            await db.runTransaction(async transaction => {
+                const snapshot = await transaction.get(ref);
+                if (!snapshot.exists) {
+                    const members = [uid, peerId].sort();
+                    transaction.set(ref, {
+                        type: 'private',
+                        title: '',
+                        member_ids: members,
+                        roles: { [uid]: 'member', [peerId]: 'member' },
+                        created_by: uid,
+                        created_at: timestamp(),
+                        latest_message: 'Start a conversation',
+                        latest_sender_id: ''
+                    });
+                }
+            });
+            return { conversation_id: id };
         }
         if (action === 'conversations.create-group') {
-            const response = await createGroup({
-                title: String(body.title || '').trim(),
-                userIds: Array.isArray(body.user_ids) ? body.user_ids.map(String) : []
+            const title = String(body.title || '').trim();
+            const userIds = Array.isArray(body.user_ids) ? [...new Set(body.user_ids.map(String))] : [];
+            if (title.length < 2 || title.length > 80 || !userIds.length || userIds.length > 20
+                || userIds.includes(uid)) {
+                throw new Error('Choose a group name and one to twenty other members.');
+            }
+            const members = [uid, ...userIds];
+            const userRefs = members.map(id => db.collection('users').doc(id));
+            const conversationRef = db.collection('conversations').doc();
+            await db.runTransaction(async transaction => {
+                const snapshots = await Promise.all(userRefs.map(ref => transaction.get(ref)));
+                if (snapshots.some(snapshot => !snapshot.exists)) throw new Error('A selected member could not be found.');
+                const roles = Object.fromEntries(members.map(id => [id, id === uid ? 'admin' : 'member']));
+                transaction.set(conversationRef, {
+                    type: 'group',
+                    title,
+                    member_ids: members,
+                    roles,
+                    created_by: uid,
+                    created_at: timestamp(),
+                    latest_message: 'Start a conversation',
+                    latest_sender_id: ''
+                });
             });
-            return { conversation_id: response.data.conversationId };
+            return { conversation_id: conversationRef.id };
         }
         if (action === 'groups.add-member' || action === 'groups.remove-member') {
-            const response = await changeGroupMember({
-                conversationId: String(body.conversation_id),
-                userId: String(body.user_id),
-                add: action === 'groups.add-member'
+            const conversationRef = db.collection('conversations').doc(String(body.conversation_id));
+            const memberRef = db.collection('users').doc(String(body.user_id));
+            await db.runTransaction(async transaction => {
+                const conversation = await transaction.get(conversationRef);
+                if (!conversation.exists || conversation.data().type !== 'group') throw new Error('Group not found.');
+                const data = conversation.data();
+                if (data.roles?.[uid] !== 'admin') throw new Error('Only a group administrator can change membership.');
+                const memberIds = data.member_ids.slice();
+                const roles = { ...data.roles };
+                const targetId = String(body.user_id);
+                if (targetId === uid) throw new Error('Choose another member.');
+                if (action === 'groups.add-member') {
+                    const target = await transaction.get(memberRef);
+                    if (!target.exists) throw new Error('That Gather member could not be found.');
+                    if (memberIds.includes(targetId)) throw new Error('That person is already in this group.');
+                    if (memberIds.length >= 21) throw new Error('This group has reached its 21-member limit.');
+                    memberIds.push(targetId);
+                    roles[targetId] = 'member';
+                } else {
+                    if (!memberIds.includes(targetId) || roles[targetId] === 'admin') {
+                        throw new Error('This member cannot be removed.');
+                    }
+                    memberIds.splice(memberIds.indexOf(targetId), 1);
+                    delete roles[targetId];
+                }
+                transaction.update(conversationRef, {
+                    member_ids: memberIds,
+                    roles,
+                    updated_at: timestamp()
+                });
             });
-            return response.data;
+            return {};
         }
         if (action === 'messages') return messages(query);
         if (action === 'messages.send') {
@@ -301,33 +393,105 @@
             if (envelope.c !== conversationId || envelope.s !== uid) {
                 throw new Error('The encrypted message does not match this conversation.');
             }
-            const response = await sendMessage({ conversationId, body: body.body });
-            const messageRef = db.collection('conversations').doc(conversationId)
-                .collection('messages').doc(response.data.messageId);
+            const conversationRef = db.collection('conversations').doc(conversationId);
+            const rateRef = db.collection('messageRateLimits').doc(uid);
+            const messageRef = conversationRef.collection('messages').doc();
+            await db.runTransaction(async transaction => {
+                const [conversation, rate] = await Promise.all([
+                    transaction.get(conversationRef),
+                    transaction.get(rateRef)
+                ]);
+                if (!conversation.exists || !conversation.data().member_ids.includes(uid)) {
+                    throw new Error('You are not a member of this conversation.');
+                }
+                const memberIds = conversation.data().member_ids.slice().sort();
+                if (JSON.stringify(Object.keys(envelope.keys).sort()) !== JSON.stringify(memberIds)) {
+                    throw new Error('The encrypted message must include all current conversation members.');
+                }
+                const rateData = rate.exists ? rate.data() : null;
+                const sameWindow = rateData && Date.now() - rateData.window_start.toMillis() < 60000;
+                if (sameWindow && rateData.count >= 30) {
+                    throw new Error('You are sending messages too quickly. Please wait a moment.');
+                }
+                transaction.set(rateRef, {
+                    window_start: sameWindow ? rateData.window_start : timestamp(),
+                    count: sameWindow ? rateData.count + 1 : 1
+                });
+                transaction.set(messageRef, {
+                    sender_id: uid,
+                    message_type: 'encrypted',
+                    body: JSON.parse(body.body),
+                    is_deleted: false,
+                    created_at: timestamp()
+                });
+                transaction.update(conversationRef, {
+                    latest_sender_id: uid,
+                    latest_message: 'Encrypted message',
+                    latest_message_id: messageRef.id,
+                    latest_at: timestamp()
+                });
+            });
             return { message: await messageRecord(await messageRef.get(), conversationId) };
         }
         if (action === 'messages.edit') {
-            const found = await getMessage(body.message_id, body.conversation_id);
-            parseEnvelope(body.body);
-            await editMessage({
-                conversationId: found.conversationId,
-                messageId: String(body.message_id),
-                body: body.body
+            const conversationId = String(body.conversation_id || '');
+            const messageRef = db.collection('conversations').doc(conversationId)
+                .collection('messages').doc(String(body.message_id));
+            const envelope = parseEnvelope(body.body);
+            if (envelope.c !== conversationId || envelope.s !== uid) {
+                throw new Error('The encrypted message does not match this conversation.');
+            }
+            await db.runTransaction(async transaction => {
+                const [conversation, message] = await Promise.all([
+                    transaction.get(db.collection('conversations').doc(conversationId)),
+                    transaction.get(messageRef)
+                ]);
+                if (!conversation.exists || !message.exists
+                    || !conversation.data().member_ids.includes(uid)
+                    || message.data().sender_id !== uid || message.data().is_deleted
+                    || Date.now() - message.data().created_at.toMillis() > 15 * 60 * 1000) {
+                    throw new Error('This message cannot be edited.');
+                }
+                transaction.update(messageRef, { body: envelope, edited_at: timestamp() });
             });
-            return { message: await messageRecord(await found.ref.get(), found.conversationId) };
+            return { message: await messageRecord(await messageRef.get(), conversationId) };
         }
         if (action === 'messages.delete') {
-            const found = await getMessage(body.message_id, body.conversation_id);
-            await deleteMessage({
-                conversationId: found.conversationId,
-                messageId: String(body.message_id)
+            const conversationId = String(body.conversation_id || '');
+            const conversationRef = db.collection('conversations').doc(conversationId);
+            const messageRef = conversationRef.collection('messages').doc(String(body.message_id));
+            await db.runTransaction(async transaction => {
+                const [conversation, message] = await Promise.all([
+                    transaction.get(conversationRef),
+                    transaction.get(messageRef)
+                ]);
+                if (!conversation.exists || !message.exists
+                    || !conversation.data().member_ids.includes(uid)
+                    || message.data().sender_id !== uid) {
+                    throw new Error('You can only delete your own message.');
+                }
+                transaction.update(messageRef, {
+                    body: {},
+                    is_deleted: true,
+                    deleted_at: timestamp()
+                });
+                if (conversation.data().latest_message_id === message.id) {
+                    transaction.update(conversationRef, {
+                        latest_message: 'Message deleted',
+                        latest_message_id: message.id,
+                        latest_at: timestamp()
+                    });
+                }
             });
             return { message_id: String(body.message_id), deleted_for_everyone: true };
         }
         if (action === 'messages.read') {
             const ref = db.collection('conversations').doc(String(body.conversation_id))
                 .collection('members').doc(uid);
-            await ref.set({ last_read_message_id: String(body.through_id), last_read_at: timestamp() }, { merge: true });
+            await ref.set({
+                last_read_message_id: String(body.through_id),
+                last_read_at: timestamp()
+            }, { merge: true });
             return {};
         }
         if (action === 'crypto.account') return { identity: await identity(uid) };
@@ -351,35 +515,18 @@
         }
         if (action === 'profile.avatar-upload') {
             const file = body instanceof FormData ? body.get('avatar') : null;
-            if (!(file instanceof File) || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)
-                || file.size < 1 || file.size > 2 * 1024 * 1024) {
-                throw new Error('Choose a JPG, PNG, or WebP photo up to 2 MB.');
-            }
-            let image;
-            try {
-                image = await createImageBitmap(file);
-            } catch {
-                throw new Error('This image file could not be decoded.');
-            }
-            const validDimensions = image.width > 0 && image.height > 0
-                && image.width <= 4096 && image.height <= 4096;
-            image.close();
-            if (!validDimensions) throw new Error('The image dimensions must be 4096 × 4096 pixels or smaller.');
-            const path = `avatars/${uid}/profile`;
-            const ref = storage.ref(path);
-            await ref.put(file, { contentType: file.type });
-            avatarUrls.delete(path);
-            await db.collection('users').doc(uid).update({ avatar_path: path, updated_at: timestamp() });
+            const avatarData = await resizeAvatar(file);
+            await db.collection('users').doc(uid).update({
+                avatar_data: avatarData,
+                updated_at: timestamp()
+            });
             return { user: await profile(uid) };
         }
         if (action === 'profile.avatar-remove') {
-            const user = await profile(uid);
-            const path = `avatars/${uid}/profile`;
-            if (user?.avatar_url) {
-                await storage.ref(path).delete();
-                avatarUrls.delete(path);
-            }
-            await db.collection('users').doc(uid).update({ avatar_path: null, updated_at: timestamp() });
+            await db.collection('users').doc(uid).update({
+                avatar_data: null,
+                updated_at: timestamp()
+            });
             return { user: await profile(uid) };
         }
         if (action === 'profile.update') {
@@ -397,7 +544,7 @@
             return { user: await profile(uid) };
         }
         if (action === 'presence.update') {
-            await db.collection('users').doc(uid).update({ last_seen_at: timestamp() });
+            await db.collection('presence').doc(uid).set({ last_seen_at: timestamp() });
             return {};
         }
         if (action === 'blocks.add') {
