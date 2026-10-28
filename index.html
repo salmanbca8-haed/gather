@@ -6,20 +6,19 @@
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#f5f4f0">
     <title>Gather — thoughtful conversations</title>
-    <link rel="stylesheet" href="assets/css/app.css?v=20261028-firebase-hosted-v1">
+    <link rel="stylesheet" href="assets/css/app.css?v=20261028-plain-chat-v1">
     <script>
         try {
             if (localStorage.getItem('gather-theme') === 'dark') document.documentElement.dataset.theme = 'dark';
         } catch (error) {}
     </script>
-    <script src="assets/js/crypto.js?v=20261028-e2ee-input" defer></script>
     <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-app-compat.js" defer></script>
     <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-auth-compat.js" defer></script>
     <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore-compat.js" defer></script>
     <script src="assets/js/firebase-config.js?v=20261028-firebase-hosted-v1" defer></script>
     <script src="assets/js/firebase-auth.js?v=20261028-firebase-hosted-v3" defer></script>
-    <script src="assets/js/firebase-data.js?v=20261028-spark-firestore-v2" defer></script>
-    <script src="assets/js/app.js?v=20261028-firebase-hosted-v2" defer></script>
+    <script src="assets/js/firebase-data.js?v=20261028-plain-chat-v1" defer></script>
+    <script src="assets/js/app.js?v=20261028-plain-chat-v1" defer></script>
 </head>
 <body>
 <div class="page-noise" aria-hidden="true"></div>
@@ -40,12 +39,12 @@
         <div class="hero-copy">
             <div class="eyebrow"><span class="eyebrow-dot"></span> A calmer place to connect</div>
             <h1>Good conversations<br>make <em>everything</em> closer.</h1>
-            <p class="hero-description">A private, thoughtful space for the people you want to hear from. No phone number required. Just you, your people, and the conversation.</p>
+            <p class="hero-description">A thoughtful space for the people you want to hear from. No phone number required. Just you, your people, and the conversation.</p>
             <div class="hero-actions">
                 <button class="button button-primary button-large" type="button" data-open-auth="register">Create your account <span aria-hidden="true">↗</span></button>
                 <button class="button button-outline button-large" type="button" data-open-auth="login">I already have an account</button>
             </div>
-            <div class="hero-note"><span class="lock-icon" aria-hidden="true">⌑</span> Private by design <span class="note-divider"></span> No email or phone needed</div>
+            <div class="hero-note"><span class="lock-icon" aria-hidden="true">⌑</span> Your people, all in one place <span class="note-divider"></span> No email or phone needed</div>
         </div>
         <div class="hero-art" aria-label="Illustration of a friendly conversation">
             <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
@@ -64,7 +63,7 @@
             <article class="feature-card"><span class="feature-icon icon-private">⌑</span><h3>Your space, your choice</h3><p>Create an account with just a username. Choose what profile details are visible and when.</p></article>
             <article class="feature-card"><span class="feature-icon icon-groups">◌</span><h3>Close-knit, not complicated</h3><p>Talk one-to-one or bring your people together in a group conversation.</p></article>
         </div>
-        <div class="privacy-note" id="privacy"><span class="privacy-icon">✳</span><p><b>Private conversations, protected by encryption</b><br>New messages are encrypted in your browser before they reach Firebase. Your recovery passphrase protects your private keys and is never sent to Gather. Verify a contact’s fingerprint through a separate trusted channel before sending. HTTPS is required in production. As with any hosted web app, users must trust the site to deliver the encryption code.</p></div>
+        <div class="privacy-note" id="privacy"><span class="privacy-icon">✳</span><p><b>Simple conversations, plainly explained</b><br>Messages are stored as regular text in Firebase so your conversations work without encryption setup. Firebase project administrators may be able to access stored messages. Use a unique password and do not send highly sensitive information.</p></div>
     </section>
 
     <section class="auth-section is-hidden" id="auth-section">
@@ -104,7 +103,7 @@
             <div class="conversation-view is-hidden" id="conversation-view">
                 <header class="conversation-header"><button class="icon-button mobile-back" type="button" id="mobile-back" aria-label="Back to conversations">←</button><span class="avatar conversation-avatar" id="peer-avatar">?</span><div class="conversation-heading"><h2 id="conversation-title"></h2><p id="conversation-subtitle"></p></div><button class="icon-button conversation-info-button" id="conversation-info" type="button" aria-label="Conversation details" title="Conversation details">ⓘ</button></header>
                 <div class="message-area" id="message-area"><button class="older-button is-hidden" type="button" id="load-older">Load earlier messages</button><div class="message-list" id="message-list"></div></div>
-                <div class="encryption-notice" id="encryption-notice" role="status">Set up encryption to start chatting.</div>
+                <div class="message-notice" id="message-notice" role="status">Messages are stored as regular text in Firebase.</div>
                 <form class="composer" id="message-form"><div class="composer-wrap"><textarea id="message-input" rows="1" maxlength="5000" placeholder="Write something kind…" aria-label="Write a message" required></textarea><div class="composer-footer"><span>Enter to send <span class="composer-dot">·</span> Shift + Enter for a new line</span><span class="char-count" id="char-count"></span><button class="send-button" type="submit" aria-label="Send message" title="Send message">↑</button></div></div></form>
             </div>
         </section>
@@ -137,13 +136,6 @@
         <label class="check-row"><input type="checkbox" name="show_last_seen" id="profile-last-seen"> Show my last seen status to chat participants</label>
         <button class="button button-primary button-full" type="submit">Save profile</button>
     </form>
-    <div class="encryption-profile">
-        <b>End-to-end encryption</b>
-        <p id="encryption-profile-status">Your encryption keys are locked.</p>
-        <code id="encryption-fingerprint" class="is-hidden"></code>
-        <button class="text-button is-hidden" type="button" id="copy-encryption-fingerprint">Copy my fingerprint</button>
-        <button class="button button-outline button-full" type="button" id="encryption-manage">Set up or unlock encryption</button>
-    </div>
     <div class="modal-divider"></div>
     <form id="password-form" class="modal-form">
         <h3>Change password</h3>
@@ -151,20 +143,7 @@
         <label>New password<input type="password" name="new_password" minlength="10" maxlength="72" autocomplete="new-password" required></label>
         <button class="button button-outline button-full" type="submit">Update password</button>
     </form>
-    <p class="privacy-copy">Your profile and encrypted message envelopes are stored in Firebase. New messages are encrypted in your browser before upload; your recovery passphrase never leaves this device. Deleting a message replaces its encrypted content with a deletion notice. The Firebase-hosted app must be trusted to deliver the encryption code, so keep the site and Firebase project secure.</p>
-</dialog>
-
-<dialog class="modal" id="crypto-modal">
-    <form method="dialog" class="modal-top"><span class="eyebrow">MESSAGE ENCRYPTION</span><button class="icon-button modal-close" type="submit" aria-label="Close encryption setup">×</button></form>
-    <h2 id="crypto-title">Protect your message keys.</h2>
-    <p class="modal-intro" id="crypto-intro"></p>
-    <form id="crypto-form" class="modal-form">
-        <label>Recovery passphrase<input id="crypto-passphrase" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></label>
-        <label id="crypto-confirm-row">Confirm recovery passphrase<input id="crypto-confirm" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></label>
-        <label class="check-row" id="crypto-saved-row"><input id="crypto-saved" type="checkbox" required> I have saved this passphrase somewhere safe. Gather cannot recover it.</label>
-        <button class="button button-primary button-full" id="crypto-submit" type="submit">Create encrypted key backup</button>
-    </form>
-    <p class="encryption-error" id="crypto-error" role="status"></p>
+    <p class="privacy-copy">Messages are saved as regular text in Firebase. Firebase project administrators may be able to access them. Avoid sending highly sensitive information.</p>
 </dialog>
 
 <dialog class="modal modal-group" id="group-modal">
@@ -181,7 +160,7 @@
 
 <dialog class="modal modal-group" id="details-modal">
     <form method="dialog" class="modal-top"><span class="eyebrow">CONVERSATION DETAILS</span><button class="icon-button modal-close" aria-label="Close">×</button></form>
-    <h2 id="details-title">People here.</h2><p class="modal-intro">Compare each fingerprint with that person through a separate trusted channel before sending encrypted messages. A server-provided fingerprint alone is not verification.</p><div id="details-members" class="details-members"></div>
+    <h2 id="details-title">People here.</h2><p class="modal-intro">People in this conversation.</p><div id="details-members" class="details-members"></div>
     <div id="group-add-area" class="is-hidden"><label class="modal-search-label">Add someone<input id="member-search" type="search" placeholder="Search people"></label><div id="member-search-results" class="modal-search-results"></div></div>
     <button class="button button-outline button-full danger-button is-hidden" type="button" id="block-user">Block this person</button>
 </dialog>

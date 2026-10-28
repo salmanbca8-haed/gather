@@ -42,17 +42,9 @@
 .profile-avatar-pick:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
 .profile-avatar-buttons { display: flex; gap: 10px; align-items: center; }
 .profile-avatar-buttons .button { min-height: 32px; padding: 7px 11px; font-size: 10px; }
-.encryption-notice { padding: 8px 13px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
-.encryption-notice.is-blocked { color: #a55043; }
+.message-notice { padding: 8px 13px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.message-notice.is-blocked { color: #a55043; }
 .message-bubble.is-legacy { font-style: italic; opacity: .8; }
-.message-bubble.is-encrypted-error { color: #a55043; }
-.encryption-profile { margin-top: 16px; padding: 13px; display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 9px; }
-.encryption-profile > b { font-size: 11px; }
-.encryption-profile > p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
-.encryption-profile code, .detail-fingerprint { overflow-wrap: anywhere; color: var(--green-dark); font-size: 10px; line-height: 1.7; }
-.encryption-profile .button { min-height: 36px; font-size: 10px; }
-.detail-fingerprint { display: block; max-width: 220px; }
-.encryption-error { margin: 10px 0 0; color: #a55043; font-size: 11px; }
 .crypto-guidance { margin: 10px 0; padding: 10px; border-radius: 8px; background: var(--green-soft); color: var(--ink); font-size: 10px; line-height: 1.6; }
 
 * { box-sizing: border-box; }

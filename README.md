@@ -1,6 +1,6 @@
 # Gather
 
-Gather is a browser-based messaging app built with Firebase Authentication, Cloud Firestore, and Firebase Hosting. It does not use PHP, MySQL, Cloud Functions, Firebase Storage, or require a paid billing plan.
+Gather is a browser-based messaging app built with Firebase Authentication, Cloud Firestore, and Firebase Hosting. Messages are ordinary text stored in Firestore; end-to-end encryption is not enabled. The app does not use PHP, MySQL, Cloud Functions, Firebase Storage, or require a paid billing plan.
 
 ## Firebase setup (Spark/no-cost plan)
 
@@ -34,8 +34,8 @@ Serve this folder with any static web server, or deploy it to Firebase Hosting. 
 - Accounts use Firebase Email/Password behind the scenes. The app turns each username into an internal `@gather.invalid` email alias, so users do not enter a real email address.
 - New accounts and conversations are stored in Firestore. Existing MySQL data is not migrated.
 - Profile photos are resized and stored in the user's Firestore profile document rather than Firebase Storage. The app caps the resulting image data at 700,000 characters; this uses Firestore document storage and read/write quota.
-- New message content is encrypted in the browser before it is sent to Firestore. Private key backups are encrypted using the user's recovery passphrase. Losing that passphrase can make the backup unrecoverable.
-- Encryption does not protect against a compromised device or malicious site code. Verify contact fingerprints through a separate trusted channel.
+- Messages are stored as readable text in Firestore and are visible to conversation participants and Firebase project administrators with database access. Do not send sensitive information.
+- Messages created before encryption was removed remain in Firestore, but the normal-chat app cannot decrypt and display them. They are retained rather than deleted.
 - Firebase Spark is no-cost within its quotas, not unlimited. Review Firebase's current [pricing and quotas](https://firebase.google.com/pricing) before public use. No billing upgrade is required for this setup.
 
 ## Validation

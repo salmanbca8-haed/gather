@@ -16,28 +16,6 @@ service cloud.firestore {
         && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids;
     }
 
-    function validEnvelope(conversationId) {
-      let envelope = request.resource.data.body;
-      let members = get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids;
-      return envelope is map
-        && envelope.keys().hasAll(['v', 'c', 's', 'fp', 'epk', 'iv', 'data', 'keys', 'sig'])
-        && envelope.v == 1
-        && envelope.c == conversationId
-        && envelope.s == request.auth.uid
-        && envelope.fp is string
-        && envelope.fp.matches('^[a-f0-9]{64}$')
-        && envelope.epk is string
-        && envelope.epk.size() <= 100
-        && envelope.iv is string
-        && envelope.data is string
-        && envelope.data.size() <= 60000
-        && envelope.sig is string
-        && envelope.sig.size() <= 200
-        && envelope.keys is map
-        && envelope.keys.keys().hasAll(members)
-        && envelope.keys.keys().hasOnly(members);
-    }
-
     function validRateCreate(next) {
       return next.keys().hasOnly(['window_start', 'count'])
         && next.window_start is timestamp
@@ -86,7 +64,9 @@ service cloud.firestore {
       let message = getAfter(messagePath).data;
       return latest.latest_sender_id == request.auth.uid
         && (
-          (!message.is_deleted && latest.latest_message == 'Encrypted message')
+          (!message.is_deleted
+            && message.message_type == 'text'
+            && latest.latest_message == message.body)
           || (message.is_deleted && latest.latest_message == 'Message deleted')
         )
         && message.sender_id == request.auth.uid;
@@ -165,35 +145,6 @@ service cloud.firestore {
         && request.auth.uid == uid
         && request.resource.data.keys().hasOnly(['last_seen_at'])
         && request.resource.data.last_seen_at == request.time;
-      allow delete: if false;
-    }
-
-    match /identities/{uid} {
-      allow read: if signedIn();
-      allow create, update: if signedIn()
-        && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly([
-          'public_encryption_key', 'public_signing_key', 'updated_at'
-        ])
-        && request.resource.data.public_encryption_key.kty == 'EC'
-        && request.resource.data.public_encryption_key.crv == 'P-256'
-        && request.resource.data.public_signing_key.kty == 'EC'
-        && request.resource.data.public_signing_key.crv == 'P-256'
-        && request.resource.data.updated_at == request.time;
-      allow delete: if false;
-    }
-
-    match /keyBackups/{uid} {
-      allow read: if signedIn() && request.auth.uid == uid;
-      allow create, update: if signedIn()
-        && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly([
-          'backup_salt', 'backup_iv', 'backup_ciphertext', 'kdf_iterations', 'updated_at'
-        ])
-        && request.resource.data.backup_ciphertext is string
-        && request.resource.data.backup_ciphertext.size() <= 12000
-        && request.resource.data.kdf_iterations == 600000
-        && request.resource.data.updated_at == request.time;
       allow delete: if false;
     }
 
@@ -284,10 +235,12 @@ service cloud.firestore {
             'sender_id', 'message_type', 'body', 'is_deleted', 'created_at'
           ])
           && request.resource.data.sender_id == request.auth.uid
-          && request.resource.data.message_type == 'encrypted'
+          && request.resource.data.message_type == 'text'
+          && request.resource.data.body is string
+          && request.resource.data.body.size() >= 1
+          && request.resource.data.body.size() <= 5000
           && request.resource.data.is_deleted == false
           && request.resource.data.created_at == request.time
-          && validEnvelope(conversationId)
           && rateWasUpdated(request.auth.uid)
           && (
             get(/databases/$(database)/documents/conversations/$(conversationId)).data.type != 'private'
@@ -302,13 +255,16 @@ service cloud.firestore {
           && (
             (
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['body', 'edited_at'])
+              && resource.data.message_type == 'text'
+              && request.resource.data.body is string
+              && request.resource.data.body.size() >= 1
+              && request.resource.data.body.size() <= 5000
               && request.time < resource.data.created_at + duration.value(15, 'm')
               && request.resource.data.edited_at == request.time
-              && validEnvelope(conversationId)
             )
             || (
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['body', 'deleted_at', 'is_deleted'])
-              && request.resource.data.body == {}
+              && request.resource.data.body == ''
               && request.resource.data.deleted_at == request.time
               && request.resource.data.is_deleted == true
             )

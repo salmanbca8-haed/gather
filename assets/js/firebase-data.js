@@ -31,24 +31,6 @@
         };
     }
 
-    function parseEnvelope(body) {
-        if (typeof body !== 'string' || body.length > 60000) {
-            throw new Error('The encrypted message is too large or malformed.');
-        }
-        let envelope;
-        try {
-            envelope = JSON.parse(body);
-        } catch {
-            throw new Error('The encrypted message format is invalid.');
-        }
-        if (!envelope || envelope.v !== 1 || typeof envelope.c !== 'string'
-            || typeof envelope.s !== 'string' || !/^[a-f0-9]{64}$/.test(envelope.fp || '')
-            || !envelope.keys || typeof envelope.keys !== 'object') {
-            throw new Error('The encrypted message format is invalid.');
-        }
-        return envelope;
-    }
-
     async function profile(uid = currentUid()) {
         const snapshot = await db.collection('users').doc(uid).get();
         if (!snapshot.exists) return null;
@@ -62,35 +44,15 @@
         });
     }
 
-    async function identity(uid) {
-        const [publicSnapshot, backupSnapshot] = await Promise.all([
-            db.collection('identities').doc(uid).get(),
-            uid === currentUid() ? db.collection('keyBackups').doc(uid).get() : Promise.resolve(null)
-        ]);
-        if (!publicSnapshot.exists) return null;
-        const publicData = publicSnapshot.data();
-        const backup = backupSnapshot?.exists ? backupSnapshot.data() : {};
-        return {
-            public_encryption_key: publicData.public_encryption_key,
-            public_signing_key: publicData.public_signing_key,
-            backup_salt: backup.backup_salt,
-            backup_iv: backup.backup_iv,
-            backup_ciphertext: backup.backup_ciphertext,
-            kdf_iterations: backup.kdf_iterations
-        };
-    }
-
     async function memberSummary(uid, role) {
-        const [user, keys] = await Promise.all([profile(uid), identity(uid)]);
+        const user = await profile(uid);
         if (!user) throw new Error('A conversation participant profile is unavailable.');
         return {
             ...user,
             role: role || 'member',
             last_seen_at: user.show_last_seen ? user.last_seen_at : null,
             online: Boolean(user.show_last_seen && user.last_seen_at
-                && Date.now() - new Date(user.last_seen_at).getTime() < 120000),
-            encryption_public_key: keys?.public_encryption_key || null,
-            signing_public_key: keys?.public_signing_key || null
+                && Date.now() - new Date(user.last_seen_at).getTime() < 120000)
         };
     }
 
@@ -151,21 +113,15 @@
 
     async function messageRecord(doc, conversationId) {
         const data = doc.data();
-        const [sender, senderIdentity] = await Promise.all([
-            profile(data.sender_id),
-            db.collection('identities').doc(data.sender_id).get()
-        ]);
-        const senderKeys = senderIdentity.exists ? senderIdentity.data() : {};
+        const sender = await profile(data.sender_id);
         return {
             id: doc.id,
             conversation_id: conversationId,
             sender_id: data.sender_id,
             sender_name: sender?.display_name || 'Gather member',
             sender_username: sender?.username || '',
-            sender_encryption_public_key: senderKeys.public_encryption_key || null,
-            sender_signing_public_key: senderKeys.public_signing_key || null,
             message_type: data.message_type,
-            body: data.is_deleted ? '' : JSON.stringify(data.body),
+            body: data.is_deleted ? '' : typeof data.body === 'string' ? data.body : '',
             is_deleted: Boolean(data.is_deleted),
             created_at: dateValue(data.created_at),
             edited_at: dateValue(data.edited_at)
@@ -389,10 +345,8 @@
         if (action === 'messages') return messages(query);
         if (action === 'messages.send') {
             const conversationId = String(body.conversation_id || '');
-            const envelope = parseEnvelope(body.body);
-            if (envelope.c !== conversationId || envelope.s !== uid) {
-                throw new Error('The encrypted message does not match this conversation.');
-            }
+            const text = typeof body.body === 'string' ? body.body.trim() : '';
+            if (!text || text.length > 5000) throw new Error('Messages must be 1–5000 characters.');
             const conversationRef = db.collection('conversations').doc(conversationId);
             const rateRef = db.collection('messageRateLimits').doc(uid);
             const messageRef = conversationRef.collection('messages').doc();
@@ -403,10 +357,6 @@
                 ]);
                 if (!conversation.exists || !conversation.data().member_ids.includes(uid)) {
                     throw new Error('You are not a member of this conversation.');
-                }
-                const memberIds = conversation.data().member_ids.slice().sort();
-                if (JSON.stringify(Object.keys(envelope.keys).sort()) !== JSON.stringify(memberIds)) {
-                    throw new Error('The encrypted message must include all current conversation members.');
                 }
                 const rateData = rate.exists ? rate.data() : null;
                 const sameWindow = rateData && Date.now() - rateData.window_start.toMillis() < 60000;
@@ -419,14 +369,14 @@
                 });
                 transaction.set(messageRef, {
                     sender_id: uid,
-                    message_type: 'encrypted',
-                    body: JSON.parse(body.body),
+                    message_type: 'text',
+                    body: text,
                     is_deleted: false,
                     created_at: timestamp()
                 });
                 transaction.update(conversationRef, {
                     latest_sender_id: uid,
-                    latest_message: 'Encrypted message',
+                    latest_message: text,
                     latest_message_id: messageRef.id,
                     latest_at: timestamp()
                 });
@@ -435,24 +385,30 @@
         }
         if (action === 'messages.edit') {
             const conversationId = String(body.conversation_id || '');
+            const text = typeof body.body === 'string' ? body.body.trim() : '';
+            if (!text || text.length > 5000) throw new Error('Messages must be 1–5000 characters.');
             const messageRef = db.collection('conversations').doc(conversationId)
                 .collection('messages').doc(String(body.message_id));
-            const envelope = parseEnvelope(body.body);
-            if (envelope.c !== conversationId || envelope.s !== uid) {
-                throw new Error('The encrypted message does not match this conversation.');
-            }
+            const conversationRef = db.collection('conversations').doc(conversationId);
             await db.runTransaction(async transaction => {
                 const [conversation, message] = await Promise.all([
-                    transaction.get(db.collection('conversations').doc(conversationId)),
+                    transaction.get(conversationRef),
                     transaction.get(messageRef)
                 ]);
                 if (!conversation.exists || !message.exists
                     || !conversation.data().member_ids.includes(uid)
                     || message.data().sender_id !== uid || message.data().is_deleted
+                    || message.data().message_type !== 'text'
                     || Date.now() - message.data().created_at.toMillis() > 15 * 60 * 1000) {
                     throw new Error('This message cannot be edited.');
                 }
-                transaction.update(messageRef, { body: envelope, edited_at: timestamp() });
+                transaction.update(messageRef, { body: text, edited_at: timestamp() });
+                if (conversation.data().latest_message_id === message.id) {
+                    transaction.update(conversationRef, {
+                        latest_message: text,
+                        latest_at: timestamp()
+                    });
+                }
             });
             return { message: await messageRecord(await messageRef.get(), conversationId) };
         }
@@ -471,7 +427,7 @@
                     throw new Error('You can only delete your own message.');
                 }
                 transaction.update(messageRef, {
-                    body: {},
+                    body: '',
                     is_deleted: true,
                     deleted_at: timestamp()
                 });
@@ -492,25 +448,6 @@
                 last_read_message_id: String(body.through_id),
                 last_read_at: timestamp()
             }, { merge: true });
-            return {};
-        }
-        if (action === 'crypto.account') return { identity: await identity(uid) };
-        if (action === 'crypto.identity-register') {
-            const backup = body;
-            const batch = db.batch();
-            batch.set(db.collection('identities').doc(uid), {
-                public_encryption_key: backup.public_encryption_key,
-                public_signing_key: backup.public_signing_key,
-                updated_at: timestamp()
-            });
-            batch.set(db.collection('keyBackups').doc(uid), {
-                backup_salt: backup.backup_salt,
-                backup_iv: backup.backup_iv,
-                backup_ciphertext: backup.backup_ciphertext,
-                kdf_iterations: backup.kdf_iterations,
-                updated_at: timestamp()
-            });
-            await batch.commit();
             return {};
         }
         if (action === 'profile.avatar-upload') {

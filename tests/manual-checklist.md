@@ -8,7 +8,7 @@ Run this checklist on the deployed Hosting site using two browser profiles.
 - [ ] Confirm the Firebase web config in `assets/js/firebase-config.js` belongs to project `gather-b3c61`.
 - [ ] Add the Hosting domain to Authentication's authorized domains.
 - [ ] Deploy with `firebase deploy --only firestore,hosting`; confirm Hosting serves `index.html`.
-- [ ] Confirm signed-out Firestore reads/writes are denied and authenticated users cannot read private key backups belonging to another user.
+- [ ] Confirm signed-out Firestore reads/writes are denied and authenticated non-members cannot read another conversation's messages.
 
 ## Accounts and profiles
 
@@ -21,12 +21,11 @@ Run this checklist on the deployed Hosting site using two browser profiles.
 - [ ] Change the password after reauthentication and confirm the new password works.
 - [ ] Sign out and confirm protected Firestore data cannot be accessed.
 
-## Conversations and encryption
+## Conversations
 
-- [ ] Create or unlock E2EE keys using a recovery passphrase; verify that a wrong passphrase is rejected.
-- [ ] Compare participant fingerprints through a separate trusted channel and verify them before sending.
-- [ ] Send a message and confirm the Firestore document contains only an encrypted envelope, not plaintext.
-- [ ] Tamper with a ciphertext or signature in a test account and confirm decryption fails.
+- [ ] Confirm there is no encryption setup, recovery passphrase, fingerprint verification, or key-backup UI.
+- [ ] Send a message and confirm its Firestore document contains readable `message_type: "text"` and a string `body`.
+- [ ] Confirm a message appears for both conversation participants and after reload.
 - [ ] Confirm messages are saved, reload correctly, paginate, and appear for both participants.
 - [ ] Confirm users cannot read or write messages for a conversation they are not a member of.
 - [ ] Confirm users blocked by either participant cannot start or send to a direct conversation.
@@ -38,6 +37,6 @@ Run this checklist on the deployed Hosting site using two browser profiles.
 ## Browser and security
 
 - [ ] Confirm values entered in profile and search fields render as text, not HTML.
-- [ ] Confirm private E2EE key backups are readable only by their owner.
+- [ ] Confirm users outside a conversation cannot read or write its messages.
 - [ ] Confirm the app works without PHP, MySQL, Apache, XAMPP, Cloud Functions, or Firebase Storage.
 - [ ] Test desktop/mobile layouts, message keyboard behavior, theme persistence, and browser refresh.

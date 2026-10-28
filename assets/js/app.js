@@ -11,12 +11,6 @@
         activeConversation: null,
         messages: [],
         seenMessageIds: new Set(),
-        decryptedMessages: new Map(),
-        decryptingMessages: new Set(),
-        cryptoIdentity: null,
-        cryptoAccount: null,
-        keyPins: {},
-        canSendEncrypted: false,
         oldestId: null,
         hasMore: false,
         selectedMembers: new Map(),
@@ -42,8 +36,7 @@
         charCount: $('#char-count'),
         profileModal: $('#profile-modal'),
         groupModal: $('#group-modal'),
-        detailsModal: $('#details-modal'),
-        cryptoModal: $('#crypto-modal')
+        detailsModal: $('#details-modal')
     };
 
     function toast(message, type = 'info') {
@@ -67,11 +60,6 @@
 
     function showLanding() {
         stopPolling();
-        state.cryptoIdentity = null;
-        state.cryptoAccount = null;
-        state.decryptedMessages.clear();
-        state.decryptingMessages.clear();
-        state.keyPins = {};
         state.conversations = [];
         state.activeId = null;
         state.activeConversation = null;
@@ -124,13 +112,6 @@
     }
 
     function showChat(user) {
-        if (state.user && state.user.id !== user.id) {
-            state.decryptedMessages.clear();
-            state.decryptingMessages.clear();
-        }
-        state.cryptoIdentity = null;
-        state.cryptoAccount = null;
-        state.keyPins = {};
         state.user = user;
         ui.landing.classList.add('is-hidden');
         $('#about').classList.add('is-hidden');
@@ -144,15 +125,11 @@
         $('#my-username').textContent = `@${user.username}`;
         setAvatar($('#my-avatar'), user.avatar_url, initials(user.display_name));
         ui.messageInput.disabled = false;
-        state.canSendEncrypted = false;
-        $('button[type="submit"]', ui.messageForm).disabled = true;
-        $('#encryption-notice').textContent = 'Unlock your encryption keys before sending. You can draft a message while keys are locked.';
-        $('#encryption-notice').classList.add('is-blocked');
+        updateMessageNotice();
         document.body.classList.add('in-chat');
         api('presence.update').catch(showError);
         refreshConversations().catch(showError);
         startPolling();
-        openCryptoDialog().catch(showError);
     }
 
     function showError(error) {
@@ -278,10 +255,6 @@
     }
 
     async function openConversation(id) {
-        if (state.activeId !== String(id)) {
-            state.decryptedMessages.clear();
-            state.decryptingMessages.clear();
-        }
         state.activeId = String(id);
         state.activeConversation = state.conversations.find(item => item.id === state.activeId) || null;
         state.messages = [];
@@ -322,7 +295,7 @@
             $('#conversation-title').textContent = state.activeConversation.title || 'Conversation';
             $('#conversation-subtitle').textContent = displayStatus(state.activeConversation);
             setAvatar($('#peer-avatar'), state.activeConversation.avatar_url, initials(state.activeConversation.title || 'G'));
-            await updateEncryptionNotice();
+            updateMessageNotice();
             state.messages = result.messages || [];
             state.messages.forEach(message => state.seenMessageIds.add(message.id));
             state.oldestId = result.oldest_id;
@@ -367,15 +340,12 @@
             if (message.is_deleted) {
                 bubble.textContent = 'Message deleted';
             } else if (message.message_type === 'encrypted') {
-                bubble.textContent = state.decryptedMessages.get(message.id) || 'Encrypted message…';
-            } else {
-                bubble.textContent = `Legacy message (not end-to-end encrypted): ${message.body}`;
+                bubble.textContent = 'This message was sent before encryption was removed and cannot be displayed in regular chat.';
                 bubble.classList.add('is-legacy');
+            } else {
+                bubble.textContent = message.body;
             }
             row.append(bubble);
-            if (!message.is_deleted && message.message_type === 'encrypted') {
-                decryptMessageBubble(message, bubble);
-            }
             const details = document.createElement('div');
             details.className = 'message-details';
             details.textContent = `${safeTime(message.created_at)}${message.edited_at ? ' · edited' : ''}${mine ? (message.is_read ? ' · read' : ' · sent') : ''}`;
@@ -476,40 +446,14 @@
         event.preventDefault();
         const body = ui.messageInput.value.trim();
         if (!body || !state.activeId) return;
-        if (!state.canSendEncrypted) {
-            toast($('#encryption-notice').textContent || 'Complete encryption setup before sending.', 'error');
-            return;
-        }
         const submit = $('button[type="submit"]', ui.messageForm);
         submit.disabled = true;
         try {
-            if (!state.cryptoIdentity || !state.activeConversation?.members?.length) {
-                throw new Error('Unlock encryption and open conversation details before sending.');
-            }
-            for (const member of state.activeConversation.members) {
-                if (!member.encryption_public_key || !member.signing_public_key) {
-                    throw new Error('Every participant must set up encryption before messaging.');
-                }
-                const fingerprint = await window.GatherCrypto.fingerprint(
-                    member.encryption_public_key,
-                    member.signing_public_key
-                );
-                if (state.keyPins[String(member.id)] !== fingerprint) {
-                    throw new Error('Verify every participant’s fingerprint in conversation details before sending.');
-                }
-            }
-            const encryptedBody = await window.GatherCrypto.encryptMessage(
-                state.cryptoIdentity,
-                state.activeConversation,
-                state.activeConversation.members,
-                body
-            );
             const result = await api('messages.send', {
                 method: 'POST',
                 body: {
                     conversation_id: state.activeId,
-                    message_type: 'encrypted',
-                    body: encryptedBody
+                    body
                 }
             });
             if (state.activeId === result.message.conversation_id && !state.seenMessageIds.has(result.message.id)) {
@@ -529,32 +473,21 @@
     }
 
     async function editMessage(message) {
-        const existingBody = message.message_type === 'encrypted'
-            ? state.decryptedMessages.get(message.id)
-            : message.body;
-        if (typeof existingBody !== 'string') {
-            toast('Unlock your keys and verify this message before editing it.', 'error');
+        if (message.message_type === 'encrypted') {
+            toast('Older encrypted messages cannot be edited in regular chat.', 'error');
             return;
         }
-        const body = window.prompt('Edit your message (available for 15 minutes):', existingBody);
+        const body = window.prompt('Edit your message (available for 15 minutes):', message.body);
         if (body === null || !body.trim()) return;
         try {
-            const encryptedBody = await window.GatherCrypto.encryptMessage(
-                state.cryptoIdentity,
-                state.activeConversation,
-                state.activeConversation.members,
-                body.trim()
-            );
             const result = await api('messages.edit', {
                 method: 'POST',
                 body: {
                     conversation_id: state.activeId,
-                    message_type: 'encrypted',
                     message_id: message.id,
-                    body: encryptedBody
+                    body: body.trim()
                 }
             });
-            state.decryptedMessages.delete(message.id);
             state.messages = state.messages.map(item => item.id === message.id ? result.message : item);
             renderMessages(true);
         } catch (error) {
@@ -569,7 +502,6 @@
                 method: 'POST',
                 body: { conversation_id: state.activeId, message_id: message.id }
             });
-            state.decryptedMessages.delete(message.id);
             state.messages = state.messages.map(item => item.id === message.id
                 ? { ...item, body: '', is_deleted: true }
                 : item);
@@ -673,207 +605,15 @@
         }
     }
 
-    function pinStorageKey(userId) {
-        return `gather-e2ee-pins-v1:${userId}`;
-    }
-
-    function readKeyPins(userId) {
-        const stored = localStorage.getItem(pinStorageKey(userId));
-        if (stored === null) return {};
-        const pins = JSON.parse(stored);
-        if (!pins || typeof pins !== 'object' || Array.isArray(pins)
-            || Object.values(pins).some(value => typeof value !== 'string')) {
-            throw new Error('Stored contact verification data is invalid. Do not send messages until it is resolved.');
-        }
-        return pins;
-    }
-
-    function saveKeyPins() {
-        localStorage.setItem(pinStorageKey(state.user.id), JSON.stringify(state.keyPins));
-    }
-
-    function showCryptoIdentity(identity) {
-        state.cryptoIdentity = identity;
-        state.keyPins[String(identity.userId)] = identity.fingerprint;
-        saveKeyPins();
-        $('#encryption-profile-status').textContent = 'Keys are unlocked in this browser session. They lock again when you sign out or close this tab.';
-        $('#encryption-fingerprint').textContent = identity.fingerprint;
-        $('#encryption-fingerprint').classList.remove('is-hidden');
-        ui.messageInput.disabled = false;
-        updateEncryptionNotice().catch(showError);
-    }
-
-    async function openCryptoDialog() {
-        const result = await api('crypto.account');
-        state.cryptoAccount = result.identity;
-        state.keyPins = readKeyPins(state.user.id);
-        const hasIdentity = Boolean(state.cryptoAccount);
-        $('#crypto-title').textContent = hasIdentity ? 'Unlock your message keys.' : 'Protect your message keys.';
-        $('#crypto-intro').textContent = hasIdentity
-            ? 'Enter your recovery passphrase to unlock your private keys in this browser. The passphrase is never sent to Gather.'
-            : 'Create a separate recovery passphrase. It encrypts your private keys before backup; Gather never receives the passphrase. If you lose it, encrypted messages cannot be recovered.';
-        $('#crypto-confirm-row').classList.toggle('is-hidden', hasIdentity);
-        $('#crypto-saved-row').classList.toggle('is-hidden', hasIdentity);
-        $('#crypto-confirm').required = !hasIdentity;
-        $('#crypto-saved').required = !hasIdentity;
-        $('#crypto-submit').textContent = hasIdentity ? 'Unlock message keys' : 'Create encrypted key backup';
-        $('#crypto-error').textContent = '';
-        $('#crypto-passphrase').value = '';
-        $('#crypto-confirm').value = '';
-        $('#crypto-saved').checked = false;
-        if (!ui.cryptoModal.open) ui.cryptoModal.showModal();
-        $('#crypto-passphrase').focus();
-    }
-
-    async function setupOrUnlockCrypto(event) {
-        event.preventDefault();
-        const submit = $('#crypto-submit');
-        submit.disabled = true;
-        $('#crypto-error').textContent = '';
-        try {
-            const passphrase = $('#crypto-passphrase').value;
-            if (state.cryptoAccount) {
-                showCryptoIdentity(await window.GatherCrypto.unlockIdentity(
-                    state.user.id,
-                    passphrase,
-                    state.cryptoAccount
-                ));
-            } else {
-                if (passphrase.length < 12 || passphrase !== $('#crypto-confirm').value) {
-                    throw new Error('Use matching recovery passphrases with at least 12 characters.');
-                }
-                if (!$('#crypto-saved').checked) {
-                    throw new Error('Save your recovery passphrase before creating the encrypted key backup.');
-                }
-                const created = await window.GatherCrypto.createIdentity(state.user.id, passphrase);
-                await api('crypto.identity-register', { method: 'POST', body: created.backup });
-                showCryptoIdentity(created.identity);
-                state.cryptoAccount = created.backup;
-            }
-            $('#crypto-passphrase').value = '';
-            $('#crypto-confirm').value = '';
-            ui.cryptoModal.close();
-            toast('End-to-end encryption is ready in this browser session.', 'success');
-        } catch (error) {
-            $('#crypto-error').textContent = error.message || 'Could not set up encryption.';
-        } finally {
-            submit.disabled = false;
-        }
-    }
-
-    async function updateEncryptionNotice() {
-        const notice = $('#encryption-notice');
+    function updateMessageNotice() {
+        const notice = $('#message-notice');
         const submit = $('button[type="submit"]', ui.messageForm);
-        const members = state.activeConversation?.members || [];
-        let canSend = false;
-        if (!state.cryptoIdentity) {
-            notice.textContent = 'Unlock your encryption keys in Profile & privacy before sending. Your draft will stay in the message box.';
-            notice.classList.add('is-blocked');
-            state.canSendEncrypted = false;
-            submit.disabled = true;
-            return;
-        }
-        if (!members.length) {
-            notice.textContent = 'Choose a conversation to send an end-to-end encrypted message.';
-            notice.classList.add('is-blocked');
-            state.canSendEncrypted = false;
-            submit.disabled = true;
-            return;
-        }
-        let allVerified = true;
-        const missingMembers = [];
-        for (const member of members) {
-            if (!member.encryption_public_key || !member.signing_public_key) {
-                missingMembers.push(member.display_name);
-                allVerified = false;
-                continue;
-            }
-            const fingerprint = await window.GatherCrypto.fingerprint(
-                member.encryption_public_key,
-                member.signing_public_key
-            );
-            if (state.keyPins[String(member.id)] !== fingerprint) {
-                allVerified = false;
-            }
-        }
-        if (missingMembers.length) {
-            const names = missingMembers.join(', ');
-            notice.textContent = `Ask ${names} to sign in and set up encryption in Profile & privacy. You can draft messages, but sending stays locked until every member has keys.`;
-        } else if (!allVerified) {
-            notice.textContent = 'Open conversation details and verify every participant’s fingerprint before sending. You can keep drafting while you verify.';
-        } else {
-            notice.textContent = 'End-to-end encrypted. All participant fingerprints are verified.';
-            canSend = true;
-        }
-        state.canSendEncrypted = canSend;
+        const canSend = Boolean(state.activeId && state.activeConversation);
+        notice.textContent = canSend
+            ? 'Messages are stored as regular text in Firebase.'
+            : 'Select a conversation to send a message.';
         notice.classList.toggle('is-blocked', !canSend);
         submit.disabled = !canSend;
-    }
-
-    async function verifyMember(member) {
-        if (!member.encryption_public_key || !member.signing_public_key) return;
-        const fingerprint = await window.GatherCrypto.fingerprint(
-            member.encryption_public_key,
-            member.signing_public_key
-        );
-        const entered = window.prompt(
-            `Compare this fingerprint with ${member.display_name} through a separate trusted channel, such as a phone call. Enter the fingerprint you obtained from them to verify it:\n\n${fingerprint}`
-        );
-        if (entered === null) return;
-        if (entered.toLowerCase().replace(/[^a-f0-9]/g, '') !== fingerprint.replace(/ /g, '')) {
-            toast('The fingerprints do not match. Do not send encrypted messages to this contact.', 'error');
-            return;
-        }
-        state.keyPins[String(member.id)] = fingerprint;
-        saveKeyPins();
-        toast(`${member.display_name}’s encryption key is verified on this browser.`, 'success');
-        await showDetails();
-        await updateEncryptionNotice();
-    }
-
-    async function copyOwnFingerprint() {
-        if (!state.cryptoIdentity) return;
-        try {
-            await navigator.clipboard.writeText(state.cryptoIdentity.fingerprint);
-            toast('Your encryption fingerprint was copied.', 'success');
-        } catch (error) {
-            window.prompt('Copy and share this fingerprint through a separate trusted channel:', state.cryptoIdentity.fingerprint);
-        }
-    }
-
-    async function decryptMessageBubble(message, bubble) {
-        if (!state.cryptoIdentity || state.decryptingMessages.has(message.id)) return;
-        const conversationId = String(message.conversation_id);
-        const userId = state.user.id;
-        state.decryptingMessages.add(message.id);
-        try {
-            if (!message.sender_encryption_public_key || !message.sender_signing_public_key) {
-                throw new Error('Cannot verify this message sender’s encryption identity.');
-            }
-            const senderFingerprint = await window.GatherCrypto.fingerprint(
-                message.sender_encryption_public_key,
-                message.sender_signing_public_key
-            );
-            if (state.keyPins[String(message.sender_id)] !== senderFingerprint) {
-                throw new Error('Encrypted message — verify the sender’s fingerprint in conversation details.');
-            }
-            const plaintext = await window.GatherCrypto.decryptMessage(
-                state.cryptoIdentity,
-                conversationId,
-                message,
-                senderFingerprint
-            );
-            if (state.activeId !== conversationId || state.user?.id !== userId) return;
-            state.decryptedMessages.set(message.id, plaintext);
-            if (bubble.isConnected) bubble.textContent = plaintext;
-        } catch (error) {
-            if (bubble.isConnected) {
-                bubble.textContent = error.message || 'Could not decrypt this message.';
-                bubble.classList.add('is-encrypted-error');
-            }
-        } finally {
-            state.decryptingMessages.delete(message.id);
-        }
     }
 
     function showProfile() {
@@ -884,12 +624,6 @@
         setAvatar($('#profile-avatar-preview'), state.user.avatar_url, initials(state.user.display_name));
         $('#avatar-file').value = '';
         $('#avatar-remove').classList.toggle('is-hidden', !state.user.avatar_url);
-        $('#encryption-profile-status').textContent = state.cryptoIdentity
-            ? 'Keys are unlocked for this browser session.'
-            : 'Keys are locked. Unlock them or set up encryption to send messages.';
-        $('#encryption-fingerprint').textContent = state.cryptoIdentity?.fingerprint || '';
-        $('#encryption-fingerprint').classList.toggle('is-hidden', !state.cryptoIdentity);
-        $('#copy-encryption-fingerprint').classList.toggle('is-hidden', !state.cryptoIdentity);
         ui.profileModal.showModal();
     }
 
@@ -967,11 +701,6 @@
             await window.GatherFirebaseAuth.signOut();
             formElement.reset();
             state.user = null;
-            state.cryptoIdentity = null;
-            state.cryptoAccount = null;
-            state.keyPins = {};
-            state.decryptedMessages.clear();
-            state.decryptingMessages.clear();
             state.activeId = null;
             stopPolling();
             showLanding();
@@ -1049,44 +778,6 @@
                 const username = document.createElement('small');
                 username.textContent = `@${member.username}`;
                 copy.append(name, username);
-                if (member.encryption_public_key && member.signing_public_key) {
-                    const fingerprint = await window.GatherCrypto.fingerprint(
-                        member.encryption_public_key,
-                        member.signing_public_key
-                    );
-                    const fingerprintLabel = document.createElement('code');
-                    fingerprintLabel.className = 'detail-fingerprint';
-                    fingerprintLabel.textContent = fingerprint;
-                    copy.append(fingerprintLabel);
-                    if (member.id === state.user.id) {
-                        const verified = document.createElement('small');
-                        verified.textContent = 'Your identity';
-                        copy.append(verified);
-                    } else if (state.keyPins[String(member.id)] === fingerprint) {
-                        const verified = document.createElement('small');
-                        verified.textContent = 'Fingerprint verified on this browser';
-                        copy.append(verified);
-                    } else if (state.keyPins[String(member.id)]) {
-                        const changed = document.createElement('small');
-                        changed.textContent = 'KEY CHANGED - DO NOT SEND';
-                        changed.classList.add('is-encrypted-error');
-                        copy.append(changed);
-                    }
-                    if (member.id !== state.user.id && state.keyPins[String(member.id)] !== fingerprint) {
-                        const verify = document.createElement('button');
-                        verify.type = 'button';
-                        verify.className = 'text-button';
-                        verify.textContent = state.keyPins[String(member.id)]
-                            ? 'Re-verify changed fingerprint'
-                            : 'Verify fingerprint';
-                        verify.addEventListener('click', () => verifyMember(member).catch(showError));
-                        copy.append(verify);
-                    }
-                } else {
-                    const missing = document.createElement('small');
-                    missing.textContent = 'Encryption not set up';
-                    copy.append(missing);
-                }
                 const role = document.createElement('span');
                 role.textContent = member.id === state.user.id ? 'You' : member.role;
                 row.append(avatar, copy, role);
@@ -1116,7 +807,7 @@
             const block = $('#block-user');
             groupAdd.classList.toggle('is-hidden', conversation.type !== 'group' || conversation.role !== 'admin');
             block.classList.toggle('is-hidden', conversation.type !== 'private');
-            await updateEncryptionNotice();
+            updateMessageNotice();
             if (!ui.detailsModal.open) ui.detailsModal.showModal();
         } catch (error) {
             showError(error);
@@ -1167,11 +858,6 @@
             if (!failure) failure = error;
         }
         state.user = null;
-        state.cryptoIdentity = null;
-        state.cryptoAccount = null;
-        state.keyPins = {};
-        state.decryptedMessages.clear();
-        state.decryptingMessages.clear();
         state.activeId = null;
         stopPolling();
         showLanding();
@@ -1246,9 +932,6 @@
         });
         $('#profile-open').addEventListener('click', showProfile);
         $('#settings-open').addEventListener('click', showProfile);
-        $('#encryption-manage').addEventListener('click', () => openCryptoDialog().catch(showError));
-        $('#crypto-form').addEventListener('submit', setupOrUnlockCrypto);
-        $('#copy-encryption-fingerprint').addEventListener('click', copyOwnFingerprint);
         $('#avatar-upload').addEventListener('click', uploadAvatar);
         $('#avatar-remove').addEventListener('click', removeAvatar);
         $('#logout-button').addEventListener('click', logout);
